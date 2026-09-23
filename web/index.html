@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Livestream quickstart · Reactor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3267.17 374.84" aria-label="Reactor" role="img"><path fill="currentColor" fill-rule="evenodd" d="M447.12,6.27c44.95,0,64.88,26.35,64.88,62.33v105.9c0,34.96-19.41,61.31-63.35,61.31h-1.05c-11.43.04-18.2,12.72-11.81,22.12l75.18,110.64h-91.16l-87.01-124.01c-3.85-5.48-10.16-8.75-16.89-8.75-11.37,0-20.58,9.14-20.58,20.41v112.35h-78.68v-112.35c0-11.27-9.21-20.41-20.58-20.41-6.74,0-13.04,3.27-16.89,8.75l-87.01,124.01H1.02l75.19-110.64c6.39-9.4-.37-22.08-11.81-22.12h-1.05c-43.93,0-63.35-26.35-63.35-61.32v-105.9C0,32.62,19.92,6.27,64.88,6.27h382.24ZM87.87,77.21c-7.15,0-9.19,2.53-9.19,9.63v69.42c0,6.59,2.04,8.61,8.69,8.61h337.28c6.64,0,8.68-2.03,8.68-8.61v-69.42c0-7.09-2.04-9.63-9.19-9.63H87.87Z"></path><path fill="currentColor" d="M3255.87,174.5c0,34.96-16.84,55.88-58.89,55.88l-20.31.05c-8.54.02-13.25,9.92-7.88,16.56l98.38,121.58h-97.74l-105.71-131.47c-3.41-4.24-8.57-6.71-14.01-6.71-9.94,0-17.99,8.05-17.99,17.98v120.2h-81.8V6.28h245.59c43.03,0,60.36,26.35,60.36,62.32v105.9ZM3031.72,77.21v87.66h142.27c6.36,0,8.32-2.03,8.32-8.61v-69.42c0-7.09-1.96-9.63-8.81-9.63h-141.78Z"></path><path fill="currentColor" d="M1073.95,174.5c0,34.96-16.84,55.88-58.89,55.88l-20.3.05c-8.54.02-13.25,9.92-7.88,16.56l98.38,121.58h-97.74l-105.7-131.47c-3.41-4.25-8.57-6.71-14.02-6.71-9.93,0-17.98,8.05-17.98,17.98v120.2h-81.8V6.28h245.59c43.03,0,60.36,26.35,60.36,62.32v105.9ZM849.8,77.21v87.66h142.27c6.36,0,8.31-2.03,8.31-8.61v-69.42c0-7.09-1.96-9.63-8.8-9.63h-141.78Z"></path><path fill="currentColor" d="M2719.12,374.84c-144.73,0-179.06-41.29-179.06-187.42S2574.39,0,2719.12,0s179.07,41.29,179.07,187.42-34.33,187.42-179.07,187.42ZM2622.63,187.42c0,106.7,10.21,118.3,96.49,118.3s95.57-11.6,95.57-118.3-10.21-118.3-95.57-118.3-96.49,11.6-96.49,118.3Z"></path><path fill="currentColor" fill-rule="evenodd" d="M1809.81,368.57h-86.6l-25.26-77.1h-155.82l-25.26,77.1h-86.6L1549,6.27h142.09l118.73,362.3ZM1614.07,71.92l-49.72,151.74h111.37l-49.72-151.74h-11.93Z"></path><path fill="currentColor" d="M1405.37,76.88h-192.73v75.24h174.8v65.75h-174.8v80.1h193.62v70.61h-275.43V6.26h274.54v70.61Z"></path><path fill="currentColor" d="M1902.56,187.42c0,106.62,11.12,118.21,92.71,118.21,53.78,0,75.05-9.05,81.53-40.18,2.17-8.78,3.11-33.24,3.25-36.59h77.97v12.81c0,97.34-39.88,133.05-162.75,133.05-140.92,0-175.25-41.27-175.25-187.3S1854.35.12,1995.27.12c111.75,0,162.75,29.21,162.75,128.41v12.37h-78.44c-.95-14.54-.68-36.86-10.24-50.04-11.04-15.96-33.34-21.65-74.07-21.65-81.59,0-92.71,11.59-92.71,118.21Z"></path><path fill="currentColor" d="M2510.86,76.97h-118.2v291.6h-81.8V76.97h-118.18V6.27h318.18v70.71Z"></path></svg><span class="integration-separator" aria-hidden="true">×</span><svg class="x-logo" width="1200" height="1227" viewBox="0 0 1200 1227" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="X"><path d="M714.163 519.284L1160.89 0H1055.03L667.137 450.887L357.328 0H0L468.492 681.821L0 1226.37H105.866L515.491 750.218L842.672 1226.37H1200L714.137 519.284H714.163ZM569.165 687.828L521.697 619.934L144.011 79.6944H306.615L611.412 515.685L658.88 583.579L1055.08 1150.3H892.476L569.165 687.854V687.828Z" fill="white"/></svg><span class="product-name">Livestream quickstart</span></div>
+  </header>
+  <main>
+    <section class="connections" aria-labelledby="connectionsHeading">
+      <div class="section-heading"><h2 id="connectionsHeading">API keys</h2></div>
+      <form id="credentialsForm" autocomplete="off">
+        <div class="credential-field">
+          <label class="field-label" for="xaiKey">Grok 4.7 <span id="xaiKeyState">Checking…</span></label>
+          <div class="key-input"><input id="xaiKey" type="password" maxlength="2048" autocomplete="new-password" spellcheck="false" placeholder="xAI API key"><button type="button" data-clear-key="XAI_API_KEY" aria-label="Remove xAI key" disabled>Remove</button></div>
+        </div>
+        <div class="credential-field">
+          <label class="field-label" for="reactorKey">Reactor <span id="reactorKeyState">Checking…</span></label>
+          <div class="key-input"><input id="reactorKey" type="password" maxlength="2048" autocomplete="new-password" spellcheck="false" placeholder="Reactor API key"><button type="button" data-clear-key="REACTOR_API_KEY" aria-label="Remove Reactor key" disabled>Remove</button></div>
+        </div>
+        <button id="saveKeys" class="secondary" type="submit">Save keys</button>
+      </form>
+      <p id="credentialWarning" class="key-warning" role="status"></p>
+      <p id="credentialFeedback" class="help" role="status" aria-live="polite"></p>
+      <details class="key-details"><summary>Key storage &amp; access</summary><p class="help">Keys are saved unencrypted in an owner-only file on this computer, never in browser storage. Blank fields keep existing keys. Keys are not verified on save. <a href="https://console.x.ai/team/default/api-keys" target="_blank" rel="noopener noreferrer">Get an xAI API key</a>.</p></details>
+    </section>
+    <section class="connections x-destination" aria-labelledby="destinationHeading">
+      <div class="section-heading"><h2 id="destinationHeading">X destination</h2><a class="studio-link" href="https://x.com/i/live-studio/sources" target="_blank" rel="noopener noreferrer">Open Live Studio ↗</a></div>
+      <form id="destinationForm" autocomplete="off">
+        <div class="credential-field"><label class="field-label" for="xServer">Server URL (RTMPS)</label><input id="xServer" type="url" maxlength="300" spellcheck="false" placeholder="rtmps://ca.pscp.tv:443/x" required></div>
+        <div class="credential-field"><label class="field-label" for="xStreamKey">Stream key <span id="streamKeyState">Not configured</span></label><input id="xStreamKey" type="password" maxlength="512" autocomplete="new-password" spellcheck="false" placeholder="Paste from X Live Studio"></div>
+        <button id="saveDestination" class="secondary" type="submit">Save destination</button>
+      </form>
+      <div class="destination-controls"><div class="run-controls"><button id="sendToX" class="secondary" type="button" disabled>Send to X</button><button id="stopSending" class="secondary" type="button" disabled>Stop sending</button><button id="removeDestination" class="text-button" type="button" disabled>Remove</button></div><p id="destinationStatus" class="help" role="status" aria-live="polite">Add your X source to send video.</p></div>
+      <p id="destinationFeedback" class="notice" role="status"></p>
+      <details class="key-details"><summary>Where to find these</summary><p class="help">Live Studio → Manage Sources → your source → key icon. Copy the RTMPS URL and stream key, then choose that same source for your broadcast on X. Saving does not connect. Start a preview first, then Send to X. An active broadcast using that source may show your video immediately.</p><p class="help">The stream key is saved unencrypted in an owner-only file on this computer, not in browser storage. A blank key keeps the saved key. While sending, local process-inspection tools may be able to see the key. Closing this tab does not stop transmission.</p></details>
+    </section>
+    <div class="workspace">
+      <section class="preview-panel" aria-label="Live Preview">
+        <div class="section-heading"><h1>Live Preview</h1></div>
+        <div class="video-wrap">
+          <video id="preview" muted controls playsinline preload="metadata"></video>
+          <div id="videoEmpty" class="video-empty"><span id="emptyMessage">Your preview will appear here.</span></div>
+        </div>
+        <div id="videoNotice" class="notice" role="status" aria-live="polite"></div>
+      </section>
+      <aside class="setup" aria-label="Stream settings">
+        <label class="field-label" for="model">Model</label>
+        <select id="model">
+          <option value="h3">H3 Turbo Realtime</option>
+          <option value="fast_h3">FastH3</option>
+          <option value="test_signal">Test signal</option>
+        </select>
+        <div id="generationSettings">
+          <div class="show-row">
+            <div class="show-thumb" id="showThumb" aria-hidden="true">+</div>
+            <div><label id="imageLabel" class="field-label" for="showFile">Reference image</label><p id="showMeta">PNG, JPEG or WebP</p></div>
+            <label class="upload">Choose<input id="showFile" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose reference image"></label>
+          </div>
+          <label id="startingFrameRow" class="starting-frame" hidden><input id="useStartingFrame" type="checkbox">Use starting frame</label>
+          <label class="field-label" for="premise">Scene</label>
+          <textarea id="premise" maxlength="2000" rows="5" placeholder="Describe what happens in your stream."></textarea>
+        </div>
+        <p id="setupMessage" class="help" role="status"></p>
+        <div class="run-controls"><button id="start" class="primary" type="button" disabled>Start preview</button><button id="stop" class="secondary" type="button" disabled>Stop</button></div>
+        <p id="usageNote" class="help">Uses Reactor and xAI credits until you stop.</p>
+      </aside>
+    </div>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

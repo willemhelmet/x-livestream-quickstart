@@ -1,0 +1,20 @@
+Reactor Infinite Livestream
+Copyright 2026 Reactor Technologies, Inc.
+
+This product is licensed under the Apache License, Version 2.0
+(see LICENSE for the full text).
+
+Includes streaming runtime code adapted from the Reactor Cookbook
+(https://github.com/reactor-team/reactor-cookbook), also Apache-2.0,
+and Reactor's narrative Twitch starter. This quickstart adapts that code
+for local preview, Grok scene writing, and explicit X transmission.
+Reactor model services are accessed separately through the Reactor API.
+
+Reactor logo and brand palette: Reactor Technologies, Inc.
+Brand marks are not licensed as software and do not imply endorsement.
+The public starter uses system fonts; no proprietary font file is bundled.
+
+X logo artwork: X Corp., official X brand toolkit (logo.svg from x-logo.zip).
+Source: https://about.x.com/en/who-we-are/brand-toolkit
+X trademarks are subject to X's brand guidelines, not the software license.
+Their use identifies the intended integration and does not indicate endorsement.
