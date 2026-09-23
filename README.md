@@ -1,3 +1,5 @@
+![Infinite X Livestream — Reactor livestream quickstart](https://inc-reactor-static.b-cdn.net/assets/repo-banners/x-livestream-quickstart/infinite-x-livestream-fcf792e6cfc1.png)
+
 # MiniMax H3 Livestreams on X
 
 Your one-stop shop for running MiniMax H3 livestreams on X. Describe a scene, choose your model, and send generated video and audio straight to your X Live Studio source—all from one browser dashboard.
