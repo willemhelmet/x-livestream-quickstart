@@ -12,14 +12,14 @@
   </header>
   <main>
     <section class="connections" aria-labelledby="connectionsHeading">
-      <div class="section-heading"><h2 id="connectionsHeading">API keys</h2><div class="key-links"><a class="studio-link" href="https://console.x.ai/team/default/api-keys" target="_blank" rel="noopener noreferrer">Get xAI key ↗</a><a class="studio-link" href="https://www.reactor.inc/account/api-keys" target="_blank" rel="noopener noreferrer">Get Reactor key ↗</a></div></div>
+      <div class="section-heading"><h2 id="connectionsHeading">API keys</h2></div>
       <form id="credentialsForm" autocomplete="off">
         <div class="credential-field">
-          <label class="field-label" for="xaiKey">Grok 4.7 <span id="xaiKeyState">Checking…</span></label>
+          <div class="field-label"><label for="xaiKey">Grok 4.7</label><div class="credential-meta"><a class="studio-link" href="https://console.x.ai/team/default/api-keys" target="_blank" rel="noopener noreferrer">Get xAI key ↗</a><span id="xaiKeyState">Checking…</span></div></div>
           <div class="key-input"><input id="xaiKey" type="password" maxlength="2048" autocomplete="new-password" spellcheck="false" placeholder="xAI API key"><button type="button" data-clear-key="XAI_API_KEY" aria-label="Remove xAI key" disabled>Remove</button></div>
         </div>
         <div class="credential-field">
-          <label class="field-label" for="reactorKey">Reactor <span id="reactorKeyState">Checking…</span></label>
+          <div class="field-label"><label for="reactorKey">Reactor</label><div class="credential-meta"><a class="studio-link" href="https://www.reactor.inc/account/api-keys" target="_blank" rel="noopener noreferrer">Get Reactor key ↗</a><span id="reactorKeyState">Checking…</span></div></div>
           <div class="key-input"><input id="reactorKey" type="password" maxlength="2048" autocomplete="new-password" spellcheck="false" placeholder="Reactor API key"><button type="button" data-clear-key="REACTOR_API_KEY" aria-label="Remove Reactor key" disabled>Remove</button></div>
         </div>
         <button id="saveKeys" class="secondary" type="submit">Save keys</button>

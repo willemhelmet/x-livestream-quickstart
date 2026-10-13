@@ -54,6 +54,9 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
                            ('https://www.reactor.inc/account/api-keys','Get Reactor key')):
             self.assertIn(f'href="{url}" target="_blank" rel="noopener noreferrer">{label}',html)
             self.assertEqual(html.count(f'href="{url}"'),1)
+        for field, state, label in (('xaiKey','xaiKeyState','Get xAI key'),('reactorKey','reactorKeyState','Get Reactor key')):
+            row = html.split(f'<label for="{field}">',1)[1].split('<div class="key-input">',1)[0]
+            self.assertLess(row.index(label),row.index(f'id="{state}"'))
 
     async def test_cross_origin_rebinding_and_private_files(self):
         for headers in ({}, {**HEADERS, 'Origin': 'https://evil.example'},
