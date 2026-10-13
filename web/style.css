@@ -74,6 +74,7 @@ main { padding-bottom: 40px; }
 #credentialsForm, #destinationForm { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 20px; align-items: end; }
 .x-destination { padding-top: 0; }
 .studio-link { color: var(--muted); font-size: 12px; text-underline-offset: 3px; }
+.key-links { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px 16px; }
 .destination-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; margin-top: 14px; }
 .destination-controls .help { margin: 0; }
 .text-button { border: 0; background: none; color: var(--muted); padding: 9px; font-size: 12px; }

@@ -48,6 +48,13 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
                                 'Chat test', 'id="logList"', '<footer', 'Publishing disabled'):
                     self.assertNotIn(removed, text)
 
+    async def test_api_key_shortcuts_for_both_providers(self):
+        html = await (await self.client.get('/')).text()
+        for url, label in (('https://console.x.ai/team/default/api-keys','Get xAI key'),
+                           ('https://www.reactor.inc/account/api-keys','Get Reactor key')):
+            self.assertIn(f'href="{url}" target="_blank" rel="noopener noreferrer">{label}',html)
+            self.assertEqual(html.count(f'href="{url}"'),1)
+
     async def test_cross_origin_rebinding_and_private_files(self):
         for headers in ({}, {**HEADERS, 'Origin': 'https://evil.example'},
                         {**HEADERS, 'Host': 'evil.example'}, {**HEADERS, 'Sec-Fetch-Site': 'cross-site'}):
