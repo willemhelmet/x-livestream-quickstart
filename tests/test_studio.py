@@ -137,7 +137,7 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.studio,'model_status',return_value={'buffer':{'phase':'warming'}}), patch.object(self.studio.publisher,'start') as start:
             response = await self.post('/api/x/start',{'confirmSend':True})
             self.assertEqual(response.status,400); start.assert_not_called()
-        response = await self.client.get('/grok-wordmark.svg')
+        response = await self.client.get('/grok-logo.svg')
         self.assertEqual(response.status,200)
         self.assertIn('fill="white"',await response.text())
         html = await (await self.client.get('/')).text()

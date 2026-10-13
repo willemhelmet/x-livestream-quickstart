@@ -714,7 +714,7 @@ def create_app(directory=None, env=None):
         return web.json_response(await studio.upload(payload, unquote(request.headers.get('X-Show-Premise', ''))))
     async def asset(request):
         name = request.match_info.get('name', 'index.html')
-        if name not in ('index.html', 'app.js', 'style.css', 'grok-wordmark.svg'):
+        if name not in ('index.html', 'app.js', 'style.css', 'grok-logo.svg'):
             raise web.HTTPNotFound()
         return web.FileResponse(ROOT / 'web' / name)
     async def media(request):
