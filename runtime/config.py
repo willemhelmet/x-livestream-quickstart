@@ -17,7 +17,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from narrative import validate_narrative, reference_files, MODEL_NAME
 from grok import GROK_MODEL, XAI_BASE_URL
-FAST_MODEL = 'reactor/fast-h3-omni'
+from omni_contract import MODEL_NAME as FAST_MODEL, CLIP_SECONDS, DEFAULT_CLIP_SECONDS
 OMNI_MODELS = (FAST_MODEL,)
 
 
@@ -93,6 +93,12 @@ def load_preset(name_or_path: str) -> dict:
             raise PresetError('FastH3 needs a scene of 1–2,000 characters')
         if not isinstance(style, str) or not style.strip() or len(style) > 2000:
             raise PresetError('FastH3 needs a valid visual style')
+        seconds = preset.get('clip_seconds', DEFAULT_CLIP_SECONDS)
+        if type(seconds) not in (int, float) or seconds not in CLIP_SECONDS:
+            raise PresetError('Choose a supported FastH3-Omni scene length')
+        continuation = preset.get('continue_scenes', True)
+        if type(continuation) is not bool:
+            raise PresetError('Scene continuation must be enabled or disabled')
         paths = []
         if preset.get('reference_image') is not None:
             import re
@@ -101,7 +107,8 @@ def load_preset(name_or_path: str) -> dict:
                 raise PresetError('Invalid FastH3-Omni reference image path')
             paths = reference_files({'characters': [{'name': 'Starting frame', 'reference': reference}]}, path.parent)
         return dict(model=preset['model'], reference_paths=paths, narrative={'premise': premise.strip()},
-                    style=style.strip(), idle_prompts=['Continue the scene naturally'])
+                    style=style.strip(), idle_prompts=['Continue the scene naturally'],
+                    clip_seconds=seconds, continue_scenes=continuation)
     try:
         narrative = validate_narrative(preset.get("narrative"))
     except ValueError as error:
@@ -170,6 +177,8 @@ class Config:
     twitch_channel: str | None
     youtube_video_id: str | None
     youtube_api_key: str | None
+    clip_seconds: float | None = None
+    continue_scenes: bool = False
 
     @staticmethod
     def load(argv: list[str] | None = None) -> "Config":
@@ -220,6 +229,8 @@ class Config:
             twitch_channel=None,
             youtube_video_id=None,
             youtube_api_key=None,
+            clip_seconds=preset.get('clip_seconds'),
+            continue_scenes=preset.get('continue_scenes', False),
 
         )
         config.validate()

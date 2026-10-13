@@ -27,6 +27,8 @@ from reactor_link import MODEL_FPS, MODEL_SAMPLE_RATE, ReactorLink
 from sinks import AudioFormat, VideoFormat, make_sink
 from narrative import NarrativeUpsampler
 from fast_narrative import FastNarrativeUpsampler
+from studio_state import publish as publish_studio_state
+from supervisor import parent_id, watch_parent
 
 logger = logging.getLogger("streaming-client")
 
@@ -51,12 +53,20 @@ def build_chat_sources(config: Config, commands: tuple[str, ...]) -> list[ChatSo
 
 async def main() -> None:
     setup_logging()
+    owner = parent_id()
+    if owner is not None and os.getppid() != owner:
+        logger.warning('Studio owner is gone; generation will not start.')
+        return
+    stopped = asyncio.Event()
+    owner_task = asyncio.create_task(watch_parent(owner, stopped), name='studio-owner') if owner else None
     args = read_options()
     preset_name = args.preset or os.environ.get('PRESET', 'show.json')
     preset_path = Path(preset_name) if '/' in preset_name or preset_name.endswith('.json') else presets_dir() / f'{preset_name}.json'
     if json.loads(preset_path.read_text()).get('model') not in OMNI_MODELS:
         await prepare_show(preset_path)
     config = Config.load()
+    if stopped.is_set():
+        return
 
     link = ReactorLink(config)
     writer = FastNarrativeUpsampler if config.model in OMNI_MODELS else NarrativeUpsampler
@@ -107,6 +117,11 @@ async def main() -> None:
         asyncio.create_task(director.run(), name="director"),
         asyncio.create_task(director.run_playout(), name="playout"),
     ]
+    if owner_task:
+        tasks.append(owner_task)
+    if os.environ.get('PREVIEW_DIR'):
+        tasks.append(asyncio.create_task(publish_studio_state(link, os.environ['PREVIEW_DIR']),
+                                         name='studio-state'))
     # Gated here because main treats any finished task as a shutdown signal,
     # and run_idle returns immediately when the target is 0. A preset with no
     # idle prompts still gets the task: the filler idles until a `!switch`
@@ -120,7 +135,6 @@ async def main() -> None:
         for source in chat_sources
     ]
 
-    stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, stopped.set)
     stop_task = asyncio.create_task(stopped.wait(), name="shutdown")
@@ -131,7 +145,7 @@ async def main() -> None:
         # pacer starts only once the first session is up. From then on it and
         # the sink survive every reconnect.
         done, _ = await asyncio.wait([first_state, *tasks], return_when=asyncio.FIRST_COMPLETED)
-        if stop_task in done:
+        if stopped.is_set():
             return
         for task in done:
             if task is not first_state:
@@ -142,7 +156,7 @@ async def main() -> None:
         overlay = (
             StreamStatusOverlay(
                 link,
-                chat_command=config.chat_command if chat_sources else None,
+                chat_command=None,
             )
             if config.overlay_enabled
             else None
@@ -167,6 +181,8 @@ async def main() -> None:
 
         # Run until a task dies (none should) or the process is interrupted.
         done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        if stopped.is_set():
+            return
         for task in done:
             if task is not stop_task:
                 raise RuntimeError(f"Task {task.get_name()} stopped") from task.exception()

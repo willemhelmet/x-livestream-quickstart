@@ -44,16 +44,19 @@ Click **Save destination**. Saving credentials does not start generation or send
 
 ### 3. Choose your show
 
-Choose a model and describe what you want on screen:
+**FastH3-Omni** is the default. Write a **Story premise**, optionally add **Visual & audio direction**, and choose a supported **Scene length**. Grok turns the premise into successive scenes as the show runs.
 
-- **FastH3-Omni:** start with a scene description. Optionally upload an image and enable **Use image reference for opening clip** to guide its appearance. The image is not an exact first frame.
-- **H3 Turbo Realtime:** upload a reference image, then add an optional scene description.
+**Carry motion and sound into the next scene** uses the most recent generated clip as a latent continuation source. Turn it off for independent shots. Optionally upload an image and enable **Use image reference for opening clip** to guide its appearance; this reference is not an exact first frame.
+
+**Save show** stores your narrative settings on this computer without starting generation. The app also saves them when you start preview, and restores them when you reopen the dashboard.
 
 For example:
 
 > A tiny late-night ramen shop in rainy Tokyo. The chef prepares a bowl while the camera slowly moves along the counter. Warm lighting, rain outside, quiet kitchen sounds.
 
 Click **Start preview** to start generating video and audio. Grok keeps writing new scene directions as the stream runs; you don't need to queue every clip yourself.
+
+Below **Live Preview**, the dashboard shows the current scene, upcoming scenes, queue counts, and whether model video and audio have arrived. Unmute the preview player to listen before sending the feed to X.
 
 **Generation uses paid Reactor and xAI credits until you stop.** There is no automatic spending cap.
 
@@ -84,6 +87,7 @@ Local playback is buffered in two-second clips, so some delay and small transiti
 - **Stop sending** disconnects from X while generation and local preview continue.
 - **Stop** stops both generation and transmission. End the broadcast in X separately.
 - **Closing the browser tab stops neither.** Use the controls or press Ctrl+C in the terminal.
+- The AI worker monitors its dashboard process and shuts down if that process exits or crashes. A browser tab can close while the dashboard's Python process stays running.
 - After a server restart, transmission stays off until you explicitly start it again.
 - If the X connection fails or falls behind, check the destination and network, then click **Send to X** again.
 
@@ -110,11 +114,11 @@ Scene descriptions and reference images are sent to Reactor and xAI for generati
 
 ## What's included
 
-A local dashboard, Grok 4.7 scene writing and suggestion moderation, FastH3-Omni and H3 Turbo Realtime adapters, reference-image upload, continuous generation, operator-relayed scene suggestions, live preview, and explicit RTMPS delivery to X.
+A local narrative dashboard, Grok 4.7 scene writing and suggestion moderation, FastH3-Omni generation and clip continuation, optional opening reference, scene pacing, continuous generation, operator-relayed scene suggestions, live preview, and explicit RTMPS delivery to X.
 
-The scope is intentionally focused: **generate a show and broadcast it**. Automatic X chat ingestion, hosted multi-user administration, and full-session recording are not included. Preview retains a rolling buffer of roughly two minutes; saved credentials and recent clips survive shutdown, but the selected show must be set up again after a server restart.
+The scope is intentionally focused: **generate a show and broadcast it**. Automatic X chat ingestion, hosted multi-user administration, and full-session recording are not included. Preview retains a rolling buffer of roughly two minutes. Credentials and narrative settings survive shutdown; after a server restart, upload any optional reference again and explicitly start preview and transmission.
 
-FastH3-Omni uses the published model ID `reactor/fast-h3-omni`. Its optional opening reference guides appearance in the first queued clip; subsequent clips are text-driven, not automatically frame-chained. The Python worker follows the published `@reactor-models/fast-h3-omni` v0.2.0 contract: five supported durations, `reference_image` (not a first-frame field), `clip_seconds_choices` state, and the documented autoplay/canvas/flush commands. See the [FastH3-Omni overview](https://docs.reactor.inc/model-api-reference/fast-h3-omni/overview) and [schema](https://docs.reactor.inc/model-api-reference/fast-h3-omni/schema).
+FastH3-Omni uses the published model ID `reactor/fast-h3-omni`. The worker uses the Python `reactor-sdk` transport and follows the inspected `@reactor-models/fast-h3-omni` v0.2.0 wire contract: five supported durations, `reference_image`, `continue_from_clip_id` with latent continuation, `clip_seconds_choices` state, and the documented autoplay/canvas/flush commands. It uses direct sessions, rather than the batch-generation API. See the [FastH3-Omni overview](https://docs.reactor.inc/model-api-reference/fast-h3-omni/overview) and [schema](https://docs.reactor.inc/model-api-reference/fast-h3-omni/schema).
 
 ## Development
 
@@ -127,6 +131,8 @@ python scripts/check_release.py
 ```
 
 Tests use synthetic media and local HTTP servers, not paid model calls or X. X reception has been reported in a manual test; repeatable paid-generation-to-X validation remains pending. Grok also provides the runtime safety classifier, but it is not a guarantee of output safety—review the feed you broadcast.
+
+For a bounded private model check, run `python scripts/smoke_omni.py`. This spends Reactor credits on one 5.875-second clip, requests the served schema, checks for actual video and non-silent audio, and saves evidence under ignored `test-results/omni-smoke/`. It never sends to X and closes the session on completion or timeout. This model check does not replace verifying picture and sound in X Live Studio.
 
 Before publishing changes, run `python scripts/check_release.py --tracked` after staging. The checker scans the source allowlist and actual Git index for common secret patterns and saved credential values; it isn't a comprehensive secret scanner. Never force-add private settings, recordings, or review screenshots.
 

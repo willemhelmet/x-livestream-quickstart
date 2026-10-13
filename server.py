@@ -23,10 +23,10 @@ import webbrowser
 from aiohttp import web
 from dotenv import dotenv_values
 from publisher import Publisher, validate_destination
+from runtime.omni_contract import MODEL_NAME as FAST_MODEL, CLIP_SECONDS, DEFAULT_CLIP_SECONDS, DEFAULT_STYLE
 
 ROOT = Path(__file__).resolve().parent
 MODEL = 'reactor/h3-reference-to-video-turbo-realtime'
-FAST_MODEL = 'reactor/fast-h3-omni'
 MAX_IMAGE = 10 * 1024 * 1024
 CONTROLLER = web.AppKey('controller', object)
 KEY_NAMES = ('REACTOR_API_KEY', 'XAI_API_KEY')
@@ -39,6 +39,25 @@ def validate_keys(value):
            any(ord(char) < 33 or ord(char) > 126 for char in key) for key in value.values()):
         raise ValueError('API keys must contain only printable characters without spaces, up to 2,048 characters.')
     return value
+
+
+def validate_story(value):
+    fields = {'premise', 'style', 'clipSeconds', 'continueScenes', 'useStartingFrame'}
+    if not isinstance(value, dict) or set(value) - fields:
+        raise ValueError('Provide story settings only.')
+    premise, style = value.get('premise'), value.get('style', DEFAULT_STYLE)
+    seconds = value.get('clipSeconds', DEFAULT_CLIP_SECONDS)
+    continuation, reference = value.get('continueScenes', True), value.get('useStartingFrame', False)
+    if not isinstance(premise, str) or not premise.strip() or len(premise) > 2000:
+        raise ValueError('Write a story premise in 1–2,000 characters.')
+    if not isinstance(style, str) or len(style) > 2000:
+        raise ValueError('Keep visual and audio direction under 2,000 characters.')
+    if type(seconds) not in (int, float) or seconds not in CLIP_SECONDS:
+        raise ValueError('Choose a supported FastH3-Omni scene length.')
+    if type(continuation) is not bool or type(reference) is not bool:
+        raise ValueError('Scene continuation and opening reference must be enabled or disabled.')
+    return dict(premise=premise.strip(), style=style.strip() or DEFAULT_STYLE, clipSeconds=seconds,
+                continueScenes=continuation, useStartingFrame=reference)
 
 
 def test_signal_command(directory: Path, duration: int | None) -> list[str]:
@@ -85,14 +104,25 @@ class Studio:
         self.logs, self.events = [], []
         self.counts = dict(messagesReceived=0, accepted=0, ignored=0, deferred=0)
         self.last_accepted = 0.0
+        self.story_file = self.directory / 'story.json'
+        self.story = None
+        if self.story_file.is_file() and not self.story_file.is_symlink():
+            try:
+                self.story = validate_story(json.loads(self.story_file.read_text()))
+            except (OSError, ValueError):
+                pass
 
-    def log(self, text, level='info'):
+    def redact(self, text):
         if self.destination['streamKey']:
             text = text.replace(self.destination['streamKey'], '[redacted]')
         for key, value in self.env.items():
             if value and any(word in key.upper() for word in ('KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'RTMP')):
                 text = text.replace(value, '[redacted]')
         text = re.sub(r'(?:https?|rtmps?)://\S+', '[remote endpoint]', text)
+        return text
+
+    def log(self, text, level='info'):
+        text = self.redact(text)
         self.logs.append(dict(at=time.time(), level=level, message=text[:1500]))
         self.logs = self.logs[-100:]
 
@@ -120,6 +150,36 @@ class Studio:
                     clip.unlink(missing_ok=True)
         return result
 
+    def model_status(self):
+        result = dict(name=FAST_MODEL, connected=False, videoReceived=False, audioReceived=False,
+                      currentScene=None, comingUp=[], generationQueued=0, playoutQueued=0)
+        if not self.run_dir or self.source == 'test_signal':
+            return result
+        path = self.run_dir / 'model-status.json'
+        try:
+            if path.is_symlink() or path.stat().st_size > 16_384:
+                return result
+            value = json.loads(path.read_text())
+            if not isinstance(value, dict):
+                return result
+            fresh = (self.phase in ('starting', 'running')
+                     and isinstance(value.get('updatedAt'), (int, float))
+                     and 0 <= time.time() - value['updatedAt'] < 5)
+            for key in ('connected', 'videoReceived', 'audioReceived'):
+                result[key] = fresh and value.get(key) is True
+            for key in ('generationQueued', 'playoutQueued'):
+                count = value.get(key)
+                if type(count) is int and 0 <= count <= 1000:
+                    result[key] = count
+            if isinstance(value.get('currentScene'), str):
+                result['currentScene'] = self.redact(value['currentScene'])[:120]
+            if isinstance(value.get('comingUp'), list):
+                result['comingUp'] = [self.redact(title)[:120] for title in value['comingUp'][:3]
+                                      if isinstance(title, str)]
+        except (OSError, ValueError, TypeError):
+            pass
+        return result
+
     def status(self):
         segments = self.segments()
         return dict(state=self.phase, source=self.source, sessionId=self.session_id,
@@ -130,6 +190,9 @@ class Studio:
                                       h3=all(importlib.util.find_spec(m) for m in ('reactor_sdk', 'openai', 'numpy', 'PIL'))),
                     credentials={key: bool(self.env.get(key)) for key in KEY_NAMES},
                     writer=dict(provider='xAI', model='grok-4.7', verified=False),
+                    model=self.model_status(),
+                    story={key: self.redact(value) if isinstance(value, str) else value
+                           for key, value in self.story.items()} if self.story else None,
                     show=self.show, logs=self.logs[-60:], events=self.events[-50:], metrics=self.counts,
                     x=dict(serverUrl=self.destination['serverUrl'], hasStreamKey=bool(self.destination['streamKey']),
                            configured=bool(self.destination['streamKey'] and self.destination['serverUrl']),
@@ -169,6 +232,24 @@ class Studio:
             await self.publisher.stop()
             return self.status()
 
+    def write_story(self, story):
+        descriptor, temporary = tempfile.mkstemp(prefix='.story-', dir=self.directory)
+        try:
+            with os.fdopen(descriptor, 'w') as stream:
+                json.dump(story, stream)
+            os.replace(temporary, self.story_file)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        self.story = story
+
+    async def save_story(self, value):
+        story = validate_story(value)
+        async with self.lock:
+            if self.phase in ('starting', 'running', 'stopping'):
+                raise ValueError('Stop the show before changing its settings.')
+            self.write_story(story)
+            return self.status()
+
     def child_env(self):
         # No destination, chat credentials, parent .env, or setup passwords reach the worker.
         allowed = ('PATH', 'TMPDIR', 'SYSTEMROOT', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
@@ -179,6 +260,7 @@ class Studio:
                       REACTOR_MODEL=FAST_MODEL if self.source == 'fast_h3' else MODEL)
         if self.source in ('h3', 'fast_h3'):
             result['LOCAL_CHAT_INBOX'] = str(self.run_dir / 'chat-inbox.jsonl')
+            result['STUDIO_PARENT_PID'] = str(os.getpid())
         return result
 
     async def save_keys(self, updates):
@@ -204,7 +286,8 @@ class Studio:
             self.log('API key settings saved locally. Keys have not been verified with the providers.')
             return self.status()
 
-    async def start(self, source='test_signal', duration=None, confirm_paid=False, premise=None, use_starting_frame=False):
+    async def start(self, source='test_signal', duration=None, confirm_paid=False, premise=None, use_starting_frame=False,
+                    style=DEFAULT_STYLE, clip_seconds=DEFAULT_CLIP_SECONDS, continue_scenes=True):
         async with self.lock:
             opening_image = None
             if self.process and self.process.returncode is None:
@@ -223,10 +306,9 @@ class Studio:
                 if not state['capabilities']['h3'] or not all(state['credentials'].values()):
                     raise ValueError('Install requirements.txt and add Reactor and xAI keys under API keys.')
             if source == 'fast_h3':
-                if not isinstance(premise, str) or not premise.strip() or len(premise) > 2000:
-                    raise ValueError('Describe a scene in 1–2,000 characters for FastH3-Omni.')
-                if type(use_starting_frame) is not bool:
-                    raise ValueError('Starting frame must be enabled or disabled.')
+                story = validate_story(dict(premise=premise, style=style, clipSeconds=clip_seconds,
+                                            continueScenes=continue_scenes, useStartingFrame=use_starting_frame))
+                premise, style = story['premise'], story['style']
                 if use_starting_frame and not self.show_path:
                     raise ValueError('Choose a reference image, or turn off Use image reference for opening clip.')
                 if use_starting_frame:
@@ -269,9 +351,10 @@ class Studio:
             command = test_signal_command(self.run_dir, duration)
             worker_preset = self.show_path
             if source == 'fast_h3':
+                self.write_story(story)
                 fast_show = dict(version=1, model=FAST_MODEL,
-                                 style='Natural motion, clear subjects, coherent camera and sound.',
-                                 narrative={'premise': premise.strip()})
+                                 style=style.strip(), clip_seconds=clip_seconds,
+                                 continue_scenes=continue_scenes, narrative={'premise': premise.strip()})
                 if opening_image:
                     destination = self.run_dir / 'references' / ('character-1' + opening_image.suffix)
                     destination.parent.mkdir(mode=0o700)
@@ -457,8 +540,13 @@ def create_app(directory=None, env=None):
     async def status(request): return web.json_response(studio.status())
     async def start(request):
         data = await body(request)
-        return web.json_response(await studio.start(data.get('source', 'test_signal'), data.get('duration'), data.get('confirmPaid', False), data.get('premise'), data.get('useStartingFrame', False)))
+        return web.json_response(await studio.start(
+            data.get('source', 'test_signal'), data.get('duration'), data.get('confirmPaid', False),
+            data.get('premise'), data.get('useStartingFrame', False),
+            data.get('style', DEFAULT_STYLE), data.get('clipSeconds', DEFAULT_CLIP_SECONDS),
+            data.get('continueScenes', True)))
     async def stop(request): return web.json_response(await studio.stop())
+    async def story(request): return web.json_response(await studio.save_story(await body(request)))
     async def chat(request):
         data = await body(request)
         return web.json_response(studio.chat(data.get('text'), data.get('author', 'operator')))
@@ -485,6 +573,7 @@ def create_app(directory=None, env=None):
         return web.FileResponse(studio.run_dir / name)
     async def cleanup(app): await studio.stop()
     app.add_routes([web.get('/', asset), web.get('/api/status', status), web.post('/api/start', start),
+                    web.post('/api/story', story),
                     web.post('/api/credentials', credentials),
                     web.post('/api/x/destination', destination), web.post('/api/x/start', send_to_x),
                     web.post('/api/x/stop', stop_x),

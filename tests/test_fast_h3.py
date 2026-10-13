@@ -39,7 +39,10 @@ class FastServerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fast_paid_gate_premise_and_image_validation_before_spawn(self):
         with patch("server.shutil.which", return_value="ffmpeg"), patch.object(self.studio, "status", return_value={"capabilities": {"h3": True}, "credentials": {"REACTOR_API_KEY": True, "XAI_API_KEY": True}}), patch("server.asyncio.create_subprocess_exec") as spawn:
-            for kwargs in ({"confirm_paid": False, "premise": "x"}, {"confirm_paid": True, "premise": ""}, {"confirm_paid": True, "premise": "x", "use_starting_frame": True}):
+            for kwargs in ({"confirm_paid": False, "premise": "x"}, {"confirm_paid": True, "premise": ""}, {"confirm_paid": True, "premise": "x", "use_starting_frame": True},
+                           {"confirm_paid": True, "premise": "x", "clip_seconds": 6},
+                           {"confirm_paid": True, "premise": "x", "clip_seconds": True},
+                           {"confirm_paid": True, "premise": "x", "continue_scenes": "true"}):
                 with self.assertRaises(ValueError):
                     await self.studio.start(source="fast_h3", **kwargs)
             spawn.assert_not_called()
@@ -47,12 +50,17 @@ class FastServerTests(unittest.IsolatedAsyncioTestCase):
     async def test_fast_spawn_failure_is_local_and_writes_preset(self):
         with patch("server.shutil.which", return_value="ffmpeg"), patch.object(self.studio, "status", return_value={"capabilities": {"h3": True}, "credentials": {"REACTOR_API_KEY": True, "XAI_API_KEY": True}}), patch("server.asyncio.create_subprocess_exec", side_effect=OSError("offline")):
             with self.assertRaises(ValueError):
-                await self.studio.start(source="fast_h3", confirm_paid=True, premise="A red kite", use_starting_frame=False)
+                await self.studio.start(source="fast_h3", confirm_paid=True, premise="A red kite", use_starting_frame=False,
+                                        style='Hand-drawn animation with quiet strings', clip_seconds=10.125, continue_scenes=False)
         self.assertEqual(self.studio.phase, "failed")
         preset = json.loads((self.studio.run_dir / "fast-show.json").read_text())
         self.assertEqual(preset["model"], FAST_MODEL)
+        self.assertEqual(preset['style'], 'Hand-drawn animation with quiet strings')
+        self.assertEqual(preset['clip_seconds'], 10.125)
+        self.assertFalse(preset['continue_scenes'])
         self.assertEqual(self.studio.child_env()["REACTOR_MODEL"], FAST_MODEL)
         self.assertEqual(self.studio.child_env()["SINK"], "preview")
+        self.assertEqual(self.studio.child_env()['STUDIO_PARENT_PID'], str(os.getpid()))
 
     async def test_reference_image_copied_without_mutating_saved_show(self):
         show = Path(self.tmp.name) / "show.json"
@@ -88,6 +96,8 @@ class FastConfigTests(unittest.TestCase):
                 self.assertEqual(config.model, FAST_MODEL)
                 self.assertEqual(config.reference_paths, [])
                 self.assertEqual(config.narrative, {'premise': 'A forest'})
+                self.assertEqual(config.clip_seconds, 8)
+                self.assertTrue(config.continue_scenes)
                 with self.assertRaisesRegex(SystemExit, 'does not match'):
                     Config.load(['--preset', str(path), '--model', 'other'])
 
@@ -99,6 +109,26 @@ class FastConfigTests(unittest.TestCase):
 class ReactorLinkFastTests(unittest.IsolatedAsyncioTestCase):
     def cfg(self, model=FAST_MODEL, refs=None):
         return SimpleNamespace(model=model, reference_paths=refs or [], local=False, api_key=None, local_url="http://127.0.0.1")
+
+    async def test_continuation_uses_only_generated_clips_and_resets_with_session(self):
+        config = self.cfg()
+        config.continue_scenes = True
+        config.clip_seconds = 8
+        link = ReactorLink(config)
+        link._ready.set()
+        link._reactor = SimpleNamespace(send_command=AsyncMock(return_value={'type': 'clip_queued', 'data': {'clip': {'clip_id': 'next'}}}))
+        self.assertEqual((link.min_seconds, link.max_seconds), (8, 8))
+        link._on_message({'type': 'clip_queued', 'data': {'clip': {'clip_id': 'not-generated'}}})
+        await link.send_command('enqueue', {'prompt': 'Opening', 'seconds': 8})
+        self.assertNotIn('continue_from_clip_id', link._reactor.send_command.call_args.args[1])
+        link._on_message({'type': 'clip_generated', 'data': {'clip': {'clip_id': 'generated-source'}}})
+        await link.send_command('enqueue', {'prompt': 'Continue', 'seconds': 8})
+        sent = link._reactor.send_command.call_args.args[1]
+        self.assertEqual(sent['continue_from_clip_id'], 'generated-source')
+        self.assertEqual(sent['continue_mode'], 'latent')
+        link._on_message({'type': 'session_reset', 'data': {}})
+        await link.send_command('enqueue', {'prompt': 'New opening', 'seconds': 8})
+        self.assertNotIn('continue_from_clip_id', link._reactor.send_command.call_args.args[1])
 
     async def test_fast_enqueue_reference_image_once_and_h3_references(self):
         link = ReactorLink(self.cfg()); link._ready.set(); link._reactor = SimpleNamespace(send_command=AsyncMock(return_value={"type": "clip_queued", "data": {"clip": {"clip_id": 'one'}}}), disconnect=AsyncMock())

@@ -39,6 +39,16 @@ h2 { font-size: 14px; font-weight: 400; margin: 0; }
 .setup select { display: block; width: 100%; padding: 12px; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 2px; }
 .setup select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .setup .run-controls { margin-top: 22px; }
+.setup-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+.setup-title { font-size: 16px; margin: 0; }
+#storyFeedback:empty { display: none; }
+#visualStyle { margin-bottom: 18px; }
+.continuation-control { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 12px; margin-top: 14px; }
+.continuation-control input { accent-color: var(--accent); margin-top: 3px; }
+.live-story { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; border-top: 1px solid var(--line); margin-top: 24px; padding-top: 18px; }
+.scene-title { font-size: 16px; margin: 8px 0; }
+.scene-queue { list-style: none; margin: 8px 0; padding: 0; color: var(--muted); font-size: 13px; }
+.scene-queue li + li { margin-top: 6px; }
 .chat-control { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 18px; }
 .chat-control h2 { margin-bottom: 8px; }
 .chat-control form { display: grid; grid-template-columns: 1fr; gap: 8px; }

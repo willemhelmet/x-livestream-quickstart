@@ -1,7 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
 const preview = $('#preview');
 const ACTIVE = new Set(['starting', 'running', 'stopping']);
-let selectedSource = 'h3';
+let selectedSource = 'fast_h3';
 let studioStatus = null;
 let busy = false;
 let polling = false;
@@ -10,6 +10,8 @@ let sessionId = null;
 let currentURL = null;
 let thumbnailURL = null;
 let revision = 0;
+let storyLoaded = false;
+let storySessionId = null;
 const playedURLs = new Set();
 
 function isActive() { return ACTIVE.has(studioStatus?.state); }
@@ -34,13 +36,14 @@ function readiness() {
   const caps = status.capabilities || {};
   const keys = status.credentials || {};
   let issue = '';
+  if (online && isActive()) { $('#setupMessage').textContent = ''; return true; }
   if (!online) issue = 'Cannot reach the local server. Restart it to continue.';
   else if (!caps.ffmpeg) issue = 'Install FFmpeg to start the preview.';
   else if (selectedSource !== 'test_signal') {
     if (!caps.h3) issue = 'Install requirements.txt to generate video.';
     else if (!keys.REACTOR_API_KEY || !keys.XAI_API_KEY) issue = 'Add your API keys above.';
     else if (selectedSource === 'h3' && !status.show) issue = 'Choose a reference image.';
-    else if (selectedSource === 'fast_h3' && !$('#premise').value.trim()) issue = 'Describe a scene to start FastH3-Omni.';
+    else if (selectedSource === 'fast_h3' && !$('#premise').value.trim()) issue = 'Write a story premise to start FastH3-Omni.';
     else if (selectedSource === 'fast_h3' && $('#useStartingFrame').checked && !status.show) issue = 'Choose a reference image.';
   }
   $('#setupMessage').textContent = issue;
@@ -62,19 +65,18 @@ function renderControls() {
   $('#generationSettings').hidden = selectedSource === 'test_signal';
   $('#imageLabel').textContent = selectedSource === 'fast_h3' ? 'Opening reference (optional)' : 'Reference image';
   $('#showFile').setAttribute('aria-label', 'Choose reference image');
-  $('#premise').placeholder = selectedSource === 'fast_h3'
-    ? 'Describe the scene, camera movement, and sound.' : 'Describe what happens in your stream.';
   $('#sendChat').disabled = busy || !online || studioStatus?.state !== 'running' || studioStatus?.source === 'test_signal';
   $('#startingFrameRow').hidden = selectedSource !== 'fast_h3';
   $('#usageNote').textContent = selectedSource !== 'test_signal'
     ? 'Uses Reactor and xAI credits until you stop.' : 'No API usage.';
-  document.querySelectorAll('#model, #showFile, #premise, #useStartingFrame, #credentialsForm input, #saveKeys')
+  document.querySelectorAll('#model, #showFile, #premise, #visualStyle, #clipSeconds, #continueScenes, #useStartingFrame, #credentialsForm input, #saveKeys')
     .forEach(node => { node.disabled = locked || !online; });
   document.querySelectorAll('[data-clear-key]').forEach(node => {
     node.disabled = locked || !online || !studioStatus?.credentials?.[node.dataset.clearKey];
   });
   const ready = readiness();
   $('#start').disabled = locked || !ready;
+  $('#saveStory').disabled = locked || !online || selectedSource !== 'fast_h3' || !$('#premise').value.trim();
   $('#stop').disabled = busy || !online || !isActive();
   $('#start').textContent = studioStatus?.state === 'starting' ? 'Starting…' : 'Start preview';
 }
@@ -83,10 +85,18 @@ function render(status) {
   if (!$('#xServer').dataset.edited && document.activeElement !== $('#xServer')) $('#xServer').value = status.x?.serverUrl || '';
   if (sessionId !== (status.sessionId || null)) resetPlayback(status.sessionId);
   if (isActive()) { selectedSource = status.source; $('#model').value = selectedSource; }
+  if (status.story && (!storyLoaded || storySessionId !== status.sessionId)) {
+    $('#premise').value = status.story.premise;
+    $('#visualStyle').value = status.story.style;
+    $('#clipSeconds').value = String(status.story.clipSeconds);
+    $('#continueScenes').checked = status.story.continueScenes;
+    $('#useStartingFrame').checked = status.story.useStartingFrame;
+    storyLoaded = true; storySessionId = status.sessionId;
+  }
   const keys = status.credentials || {};
   const missing = [];
   for (const [key, label, id] of [['XAI_API_KEY', 'xAI', '#xaiKeyState'], ['REACTOR_API_KEY', 'Reactor', '#reactorKeyState']]) {
-    $(id).textContent = keys[key] ? 'Saved · not verified' : 'Missing';
+    $(id).textContent = keys[key] ? 'Saved' : 'Missing';
     if (!keys[key]) missing.push(label);
   }
   $('#credentialWarning').textContent = missing.length ? 'Add ' + missing.join(' and ') + ' API keys to generate video.' : '';
@@ -94,6 +104,19 @@ function render(status) {
   $('#emptyMessage').textContent = isActive() ? 'Preparing your preview…' : 'Your preview will appear here.';
   if (status.state === 'failed') localError('Generation stopped unexpectedly. Check the server logs, then try again.');
   if (selectedSource === status.source && !currentURL && status.media?.segments?.length) playNextClip();
+  const model = status.model || {};
+  const testSignal = isActive() && status.source === 'test_signal';
+  $('#currentScene').textContent = testSignal ? 'Test signal' : model.currentScene
+    || (isActive() ? (model.videoReceived ? 'Preparing the next scene…' : 'Writing the opening scene…') : 'Your story starts here.');
+  $('#modelStatus').textContent = testSignal ? 'Synthetic video · silent audio'
+    : !isActive() ? 'FastH3-Omni'
+    : !model.connected ? 'Connecting to FastH3-Omni…'
+    : model.videoReceived && model.audioReceived ? 'Video and audio arriving'
+    : 'Generating video and audio…';
+  const titles = model.comingUp?.length ? model.comingUp : ['No scenes queued yet.'];
+  $('#comingUp').replaceChildren(...titles.map(title => { const item = document.createElement('li'); item.textContent = title; return item; }));
+  $('#queueStatus').textContent = isActive() && !testSignal
+    ? `${model.generationQueued || 0} generating · ${model.playoutQueued || 0} ready` : '';
   renderControls();
 }
 async function api(path, options = {}) {
@@ -112,7 +135,10 @@ async function refresh() {
 async function mutate(path, body) {
   if (busy) return;
   revision++; busy = true; renderControls(); $('#videoNotice').textContent = '';
-  try { render(await api(path, {method:'POST', headers:{'Content-Type':'application/json','X-Studio-Control':'1'}, body:JSON.stringify(body)})); }
+  try {
+    const status = await api(path, {method:'POST', headers:{'Content-Type':'application/json','X-Studio-Control':'1'}, body:JSON.stringify(body)});
+    render(status); return status;
+  }
   catch (error) { localError(error.message); }
   finally { busy = false; renderControls(); }
 }
@@ -121,10 +147,19 @@ $('#model').addEventListener('change', () => {
   if (studioStatus?.source !== selectedSource) resetPlayback(studioStatus?.sessionId);
   renderControls();
 });
+function storySettings() { return {
+  premise:$('#premise').value,
+  useStartingFrame:selectedSource === 'fast_h3' && $('#useStartingFrame').checked,
+  style:$('#visualStyle').value.trim() || 'Natural motion, clear subjects, coherent camera and sound.',
+  clipSeconds:Number($('#clipSeconds').value), continueScenes:$('#continueScenes').checked
+}; }
 $('#start').addEventListener('click', () => mutate('/api/start', {
-  source:selectedSource, duration:null, confirmPaid:selectedSource !== 'test_signal', premise:$('#premise').value,
-  useStartingFrame:selectedSource === 'fast_h3' && $('#useStartingFrame').checked
+  source:selectedSource, duration:null, confirmPaid:selectedSource !== 'test_signal', ...storySettings()
 }));
+$('#saveStory').addEventListener('click', async () => {
+  $('#storyFeedback').textContent = '';
+  if (await mutate('/api/story', storySettings())) $('#storyFeedback').textContent = 'Show saved on this computer.';
+});
 $('#premise').addEventListener('input', renderControls);
 $('#useStartingFrame').addEventListener('change', renderControls);
 $('#stop').addEventListener('click', () => mutate('/api/stop', {}));

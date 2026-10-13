@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -78,6 +79,41 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.post('/api/start', body)).status, 400)
         self.assertEqual((await self.post('/api/chat', {'text': 'make it rain'})).status, 400)
         self.assertIsNone(self.studio.process)
+
+    async def test_model_status_reports_media_and_redacts_titles_without_exposing_file(self):
+        self.studio.phase = 'running'
+        self.studio.source = 'fast_h3'
+        self.studio.run_dir = Path(self.tmp.name) / 'runs' / 'telemetry'
+        self.studio.run_dir.mkdir(parents=True)
+        path = self.studio.run_dir / 'model-status.json'
+        value = dict(updatedAt=time.time(), connected=True, videoReceived=True, audioReceived=True,
+                     currentScene='reactor-test-secret scene', comingUp=['writer-test-secret next'],
+                     generationQueued=1, playoutQueued=2, unexpected='private-field')
+        path.write_text(json.dumps(value))
+        model = self.studio.status()['model']
+        self.assertTrue(model['connected'])
+        self.assertTrue(model['audioReceived'])
+        self.assertNotIn('reactor-test-secret', json.dumps(model))
+        self.assertNotIn('writer-test-secret', json.dumps(model))
+        self.assertNotIn('unexpected', model)
+        value['updatedAt'] -= 60
+        path.write_text(json.dumps(value))
+        self.assertFalse(self.studio.status()['model']['connected'])
+        self.assertEqual((await self.client.get('/model-status.json')).status, 404)
+
+    async def test_save_show_restores_settings_without_starting_generation(self):
+        story = dict(premise='A living pottery studio', style='Warm light and quiet rain',
+                     clipSeconds=10.125, continueScenes=True, useStartingFrame=False)
+        response = await self.post('/api/story', story)
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())['story'], story)
+        self.assertIsNone(self.studio.process)
+        self.assertEqual(self.studio.story_file.stat().st_mode & 0o777, 0o600)
+        restored = Studio(Path(self.tmp.name), env={})
+        self.assertEqual(restored.status()['story'], story)
+        self.assertEqual((await self.post('/api/story', {**story, 'clipSeconds': 6})).status, 400)
+        self.assertEqual(json.loads(self.studio.story_file.read_text()), story)
+        self.assertEqual((await self.client.post('/api/story', json=story)).status, 403)
 
     async def test_image_upload_validates_actual_content(self):
         image = io.BytesIO()

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Livestream quickstart · Reactor</title>
+  <title>FastH3-Omni Livestream quickstart · Reactor</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -47,14 +47,19 @@
           <div id="videoEmpty" class="video-empty"><span id="emptyMessage">Your preview will appear here.</span></div>
         </div>
         <div id="videoNotice" class="notice" role="status" aria-live="polite"></div>
+        <section class="live-story" aria-label="Live narrative status">
+          <div><h2>Now playing</h2><p id="currentScene" class="scene-title">Your story starts here.</p><p id="modelStatus" class="help" role="status">FastH3-Omni</p></div>
+          <div><h2>Coming up</h2><ul id="comingUp" class="scene-queue"><li>No scenes queued yet.</li></ul><p id="queueStatus" class="help"></p></div>
+        </section>
       </section>
       <aside class="setup" aria-label="Stream settings">
-        <label class="field-label" for="model">Model</label>
+        <div class="setup-heading"><h2 class="setup-title">Build a narrative</h2><button id="saveStory" class="text-button" type="button" disabled>Save show</button></div>
+        <label class="field-label" for="model">Source</label>
         <select id="model">
-          <option value="h3">H3 Turbo Realtime</option>
           <option value="fast_h3">FastH3-Omni</option>
-          <option value="test_signal">Test signal</option>
+          <option value="test_signal">Test signal · no API usage</option>
         </select>
+        <p id="storyFeedback" class="help" role="status" aria-live="polite"></p>
         <div id="generationSettings">
           <div class="show-row">
             <div class="show-thumb" id="showThumb" aria-hidden="true">+</div>
@@ -62,8 +67,19 @@
             <label class="upload">Choose<input id="showFile" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose reference image"></label>
           </div>
           <label id="startingFrameRow" class="starting-frame" hidden><input id="useStartingFrame" type="checkbox">Use image reference for opening clip</label>
-          <label class="field-label" for="premise">Scene</label>
-          <textarea id="premise" maxlength="2000" rows="5" placeholder="Describe what happens in your stream."></textarea>
+          <label class="field-label" for="premise">Story premise</label>
+          <textarea id="premise" maxlength="2000" rows="5" placeholder="A tiny late-night ramen shop in rainy Tokyo. Follow the chef as unusual visitors arrive, each with a story to tell."></textarea>
+          <label class="field-label" for="visualStyle">Visual &amp; audio direction</label>
+          <textarea id="visualStyle" maxlength="2000" rows="3" placeholder="Natural motion, clear subjects, coherent camera and sound."></textarea>
+          <label class="field-label" for="clipSeconds">Scene length</label>
+          <select id="clipSeconds">
+            <option value="5.875">5.875 seconds</option>
+            <option value="8" selected>8 seconds</option>
+            <option value="10.125">10.125 seconds</option>
+            <option value="12.25">12.25 seconds</option>
+            <option value="14.375">14.375 seconds</option>
+          </select>
+          <label class="continuation-control"><input id="continueScenes" type="checkbox" checked>Carry motion and sound into the next scene</label>
         </div>
         <p id="setupMessage" class="help" role="status"></p>
         <div class="run-controls"><button id="start" class="primary" type="button" disabled>Start preview</button><button id="stop" class="secondary" type="button" disabled>Stop</button></div>

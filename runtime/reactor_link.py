@@ -19,6 +19,7 @@ from dataclasses import asdict
 from reactor_sdk import Reactor, ReactorStatus
 
 from config import Config, OMNI_MODELS
+from omni_contract import CLIP_SECONDS
 from pacer import Pacer
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ MODEL_SAMPLE_RATE = 48_000
 _DEFAULT_STATE: dict[str, Any] = {
     "width": 1344,
     "height": 768,
-    "clip_seconds_choices": [5.875, 8, 10.125, 12.25, 14.375],
+    "clip_seconds_choices": list(CLIP_SECONDS),
     "generation_queued": 0,
     "generation_capacity": 20,
     "playout_queued": 0,
@@ -64,6 +65,9 @@ class ReactorLink:
         self.reference_images = []
         self.starting_frame = None
         self._opening_frame_used = False
+        self.last_generated_clip_id = None
+        self.current_clip = None
+        self.video_frames = self.audio_frames = 0
         self._canvas = None
         self._listeners: list[Callable[[str, dict], None]] = []
         self.state: dict[str, Any] = dict(_DEFAULT_STATE)
@@ -84,11 +88,15 @@ class ReactorLink:
 
     @property
     def min_seconds(self) -> float:
+        if self._config.model in OMNI_MODELS and getattr(self._config, 'clip_seconds', None) is not None:
+            return float(self._config.clip_seconds)
         choices = self.state.get('clip_seconds_choices')
         return float(min(choices)) if choices else float(self.state.get("clip_seconds_min", 5.0))
 
     @property
     def max_seconds(self) -> float:
+        if self._config.model in OMNI_MODELS and getattr(self._config, 'clip_seconds', None) is not None:
+            return float(self._config.clip_seconds)
         choices = self.state.get('clip_seconds_choices')
         return float(max(choices)) if choices else float(self.state.get("clip_seconds_max", 15.084))
 
@@ -136,6 +144,16 @@ class ReactorLink:
         elif kind == "queue_update":
             self.generation_clips = data.get("generation", [])
             self.playout_clips = data.get("playout", [])
+        elif kind == 'clip_generated':
+            clip = data.get('clip', {})
+            if isinstance(clip, dict) and isinstance(clip.get('clip_id'), str):
+                self.last_generated_clip_id = clip['clip_id']
+        elif kind == 'clip_started':
+            self.current_clip = data.get('clip')
+        elif kind in ('clip_finished', 'clip_stopped'):
+            self.current_clip = None
+        elif kind == 'session_reset':
+            self.last_generated_clip_id = self.current_clip = None
         elif kind == "command_error":
             logger.warning(
                 "[reactor] command refused: %s — %s",
@@ -162,6 +180,10 @@ class ReactorLink:
                 if self._config.model in OMNI_MODELS:
                     data = dict(data)
                     data.pop('reference_images', None)
+                    if (getattr(self._config, 'continue_scenes', False) and self.last_generated_clip_id
+                            and 'continue_from_clip_id' not in data):
+                        data['continue_from_clip_id'] = self.last_generated_clip_id
+                        data['continue_mode'] = 'latent'
                     if (self.starting_frame and not self._opening_frame_used
                             and 'reference_image' not in data and 'continue_from_clip_id' not in data):
                         data['reference_image'] = self.starting_frame
@@ -173,6 +195,8 @@ class ReactorLink:
             reply = payload(await reactor.send_command(command, data))
             if command == 'enqueue' and isinstance(reply, dict) and isinstance(reply.get('clip'), dict):
                 self._opening_frame_used = True
+                if data.get('continue_from_clip_id'):
+                    logger.info('[reactor] scene continuation accepted')
             return reply
         except Exception as error:
             logger.warning("[reactor] %s failed: %s", command, error)
@@ -243,6 +267,10 @@ class ReactorLink:
                     any(key not in state for key in ('clip_seconds_min', 'clip_seconds_max')))):
             raise RuntimeError("Model did not return its queue and duration contract")
         self.state = state
+        selected_seconds = getattr(self._config, 'clip_seconds', None)
+        if (self._config.model in OMNI_MODELS and selected_seconds is not None
+                and selected_seconds not in state['clip_seconds_choices']):
+            raise RuntimeError('The deployed model does not support the selected scene length')
         self.generation_clips = []
         self.playout_clips = []
         self.reference_images = []
@@ -260,6 +288,9 @@ class ReactorLink:
                 raise RuntimeError('FastH3 canvas setup was refused')
             if await self._raw_command(reactor, 'set_flush_on_clip_end', {'enabled': False}) is None:
                 raise RuntimeError('FastH3 frame-hold setup was refused')
+            if selected_seconds is not None:
+                if await self._raw_command(reactor, 'set_clip_seconds', {'seconds': selected_seconds}) is None:
+                    raise RuntimeError('FastH3-Omni scene length setup was refused')
         logger.info('[reactor] prepared %d image inputs for this session', len(self._config.reference_paths))
 
         # Autoplay on: the model chains the playout queue's front clip the
@@ -297,11 +328,13 @@ class ReactorLink:
         self.reference_images = []
         self.starting_frame = None
         self._opening_frame_used = False
+        self.last_generated_clip_id = self.current_clip = None
+        self.video_frames = self.audio_frames = 0
         reactor, self._reactor = self._reactor, None
         if reactor is None:
             return
         try:
-            await reactor.disconnect()
+            await asyncio.wait_for(reactor.disconnect(), 10)
         except Exception as error:
             logger.warning("[reactor] disconnect failed: %s", error)
             # The session we owned may now linger server-side and block the
@@ -334,6 +367,7 @@ class ReactorLink:
     # ---------------------------------------------------------- media path
 
     def _on_video_frame(self, frame) -> None:
+        self.video_frames += 1
         height, width = frame.shape[:2]
         if self._canvas is None:
             self._canvas = (width, height)
@@ -342,6 +376,7 @@ class ReactorLink:
             self._pacer.submit_video(frame)
 
     def _on_audio_frame(self, frame, sample_rate=MODEL_SAMPLE_RATE) -> None:
+        self.audio_frames += 1
         if sample_rate != MODEL_SAMPLE_RATE:
             logger.warning(
                 "[reactor] audio at %dHz, expected %d — timing will drift",
