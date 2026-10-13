@@ -87,7 +87,7 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
         self.studio.run_dir.mkdir(parents=True)
         path = self.studio.run_dir / 'model-status.json'
         value = dict(updatedAt=time.time(), connected=True, videoReceived=True, audioReceived=True,
-                     currentScene='reactor-test-secret scene', comingUp=['writer-test-secret next'],
+                     currentScene='reactor-test-secret scene', currentPrompt='writer-test-secret camera', comingUp=['writer-test-secret next'],
                      generationQueued=1, playoutQueued=2, unexpected='private-field')
         path.write_text(json.dumps(value))
         model = self.studio.status()['model']
@@ -96,6 +96,7 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('reactor-test-secret', json.dumps(model))
         self.assertNotIn('writer-test-secret', json.dumps(model))
         self.assertNotIn('unexpected', model)
+        self.assertEqual(model['currentPrompt'], '[redacted] camera')
         value['updatedAt'] -= 60
         path.write_text(json.dumps(value))
         self.assertFalse(self.studio.status()['model']['connected'])
@@ -127,6 +128,45 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post('/api/show', data=b'not an image', headers=HEADERS)
         self.assertEqual(response.status, 400)
         self.assertEqual(original, self.studio.show_path)
+
+    async def test_creative_upload_save_restore_and_prompt_without_generation(self):
+        image = io.BytesIO(); Image.new('RGB', (16,16), '#996644').save(image, format='PNG')
+        result = await self.client.post('/api/assets', data=image.getvalue(), headers={**HEADERS,'X-Asset-Type':'image'})
+        self.assertEqual(result.status, 200)
+        asset = (await result.json())['uploadedAsset']
+        story = dict(premise='A chef serves soup', creative=dict(camera='Slow push in',sound='Sizzling broth',
+            images=[dict(id=asset['id'],kind='person',description='reactor-test-secret chef')], firstFrame=asset['id']))
+        saved = await self.post('/api/story', story)
+        self.assertEqual(saved.status, 200)
+        self.assertNotIn('reactor-test-secret', json.dumps(await saved.json()))
+        self.assertIsNone(self.studio.process)
+        restored = Studio(Path(self.tmp.name), env={})
+        self.assertEqual(restored.story['creative']['images'][0]['id'], asset['id'])
+        self.assertEqual(restored.status()['assets'], [asset])
+        prompt = await self.post('/api/prompt-preview', story)
+        self.assertEqual(prompt.status, 200)
+        self.assertIn('Camera: Slow push in', (await prompt.json())['prompt'])
+        wrong = dict(story, creative={'images':[dict(id='0'*24,kind='person',description='Missing')]})
+        self.assertEqual((await self.post('/api/story', wrong)).status, 400)
+        self.assertEqual((await self.client.post('/api/assets', data=image.getvalue())).status, 403)
+        self.assertEqual((await self.client.get('/assets/' + asset['id'] + '.png')).status, 404)
+        media = await self.client.get('/api/assets/' + asset['id'])
+        self.assertEqual(media.status, 200)
+        self.assertEqual(await media.read(), image.getvalue())
+        self.assertEqual((await self.client.get('/api/assets/' + '0'*24)).status, 404)
+        self.assertEqual((self.studio.asset_dir / (asset['id']+'.png')).stat().st_mode & 0o777, 0o600)
+
+    async def test_audio_upload_checks_decoded_duration_and_channels(self):
+        import wave
+        for seconds, expected in ((1,400),(3,200),(16,400)):
+            buffer = io.BytesIO()
+            with wave.open(buffer,'wb') as audio:
+                audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(8000)
+                audio.writeframes(b'\0\0' * 8000 * seconds)
+            response = await self.client.post('/api/assets', data=buffer.getvalue(), headers={**HEADERS,'X-Asset-Type':'audio'})
+            self.assertEqual(response.status, expected)
+        self.assertEqual(len(self.studio.creative_assets()), 1)
+        self.assertEqual(list(self.studio.asset_dir.glob('.audio-*')), [])
 
     async def test_operator_suggestion_is_queued_only_for_running_model(self):
         self.studio.phase = 'running'

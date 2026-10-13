@@ -23,6 +23,7 @@ def snapshot(link):
                 videoReceived=link.video_frames > 0, audioReceived=link.audio_frames > 0,
                 generationQueued=link.generation_queued, playoutQueued=link.playout_queued,
                 currentScene=scene_title(link.current_clip),
+                currentPrompt=link.current_clip.get('prompt', '') if isinstance(link.current_clip, dict) else '',
                 comingUp=[scene_title(clip) for clip in
                           (link.playout_clips + link.generation_clips)[:3]])
 

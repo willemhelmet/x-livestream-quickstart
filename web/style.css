@@ -43,6 +43,16 @@ h2 { font-size: 14px; font-weight: 400; margin: 0; }
 .setup-title { font-size: 16px; margin: 0; }
 #storyFeedback:empty { display: none; }
 #visualStyle { margin-bottom: 18px; }
+#generationSettings > .field-label { margin-top: 16px; }
+.creative-details .field-label { margin-top: 14px; }
+.creative-details .upload { margin-block: 8px; }
+.reference-card { border: 1px solid var(--line); padding: 10px; margin: 12px 0; }
+.reference-card textarea { margin-top: 8px; }
+.reference-card select { padding: 8px; }
+.reference-card img { display: block; width: 100%; max-height: 150px; object-fit: contain; margin: 8px 0; }
+.reference-card audio { display: block; width: 100%; height: 32px; margin: 8px 0; }
+.reference-card header { display: flex; align-items: center; justify-content: space-between; }
+#promptPreview, #currentPrompt { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font: 11px/1.6 var(--mono); max-height: 380px; overflow-y: auto; }
 .continuation-control { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 12px; margin-top: 14px; }
 .continuation-control input { accent-color: var(--accent); margin-top: 3px; }
 .live-story { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; border-top: 1px solid var(--line); margin-top: 24px; padding-top: 18px; }

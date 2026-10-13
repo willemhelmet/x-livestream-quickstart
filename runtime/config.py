@@ -16,6 +16,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from narrative import validate_narrative, reference_files, MODEL_NAME
+from creative import validate_creative
 from grok import GROK_MODEL, XAI_BASE_URL
 from omni_contract import MODEL_NAME as FAST_MODEL, CLIP_SECONDS, DEFAULT_CLIP_SECONDS
 OMNI_MODELS = (FAST_MODEL,)
@@ -106,9 +107,35 @@ def load_preset(name_or_path: str) -> dict:
             if not isinstance(reference, str) or not re.fullmatch(r'references/character-1\.(png|jpg|webp)', reference):
                 raise PresetError('Invalid FastH3-Omni reference image path')
             paths = reference_files({'characters': [{'name': 'Starting frame', 'reference': reference}]}, path.parent)
-        return dict(model=preset['model'], reference_paths=paths, narrative={'premise': premise.strip()},
+        creative = validate_creative(narrative.get('creative', {}), continuation=continuation, opening_reference=bool(paths))
+        creative_paths = {}
+        files = preset.get('creative_files', {})
+        expected = {field: len(creative.get(field, [])) for field in ('images', 'audios')}
+        expected.update({field: int(bool(creative.get(field))) for field in ('firstFrame', 'lastFrame')})
+        if not isinstance(files, dict) or set(files) - set(expected):
+            raise PresetError('Invalid creative reference files')
+        for field, count in expected.items():
+            entries = files.get(field, [])
+            if not isinstance(entries, list) or len(entries) != count:
+                raise PresetError('Creative references do not match their files')
+            for entry in entries:
+                import re
+                if not isinstance(entry, str) or not re.fullmatch(r'references/[a-f0-9]{24}\.(png|jpg|webp|wav|mp3|aac|m4a|ogg|flac|webm)', entry):
+                    raise PresetError('Invalid creative reference path')
+                target = path.parent / entry
+                if target.is_symlink() or not target.resolve().is_relative_to((path.parent / 'references').resolve()) or not target.is_file():
+                    raise PresetError('Creative reference file is missing or unsafe')
+                if (target.suffix in ('.png', '.jpg', '.webp')) != (field != 'audios'):
+                    raise PresetError('Creative reference media type does not match its role')
+                creative_paths.setdefault(field, []).append(target.resolve())
+        narrative_settings = {'premise': premise.strip()}
+        if creative:
+            narrative_settings['creative'] = creative
+        if paths:
+            narrative_settings['opening_reference'] = True
+        return dict(model=preset['model'], reference_paths=paths, narrative=narrative_settings,
                     style=style.strip(), idle_prompts=['Continue the scene naturally'],
-                    clip_seconds=seconds, continue_scenes=continuation)
+                    clip_seconds=seconds, continue_scenes=continuation, creative_paths=creative_paths)
     try:
         narrative = validate_narrative(preset.get("narrative"))
     except ValueError as error:
@@ -179,6 +206,7 @@ class Config:
     youtube_api_key: str | None
     clip_seconds: float | None = None
     continue_scenes: bool = False
+    creative_paths: dict | None = None
 
     @staticmethod
     def load(argv: list[str] | None = None) -> "Config":
@@ -231,6 +259,7 @@ class Config:
             youtube_api_key=None,
             clip_seconds=preset.get('clip_seconds'),
             continue_scenes=preset.get('continue_scenes', False),
+            creative_paths=preset.get('creative_paths', {}),
 
         )
         config.validate()

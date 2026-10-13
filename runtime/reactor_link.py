@@ -63,6 +63,7 @@ class ReactorLink:
         self._first_video = asyncio.Event()
         self._loop = None
         self.reference_images = []
+        self.creative_refs = {}
         self.starting_frame = None
         self._opening_frame_used = False
         self.last_generated_clip_id = None
@@ -154,6 +155,7 @@ class ReactorLink:
             self.current_clip = None
         elif kind == 'session_reset':
             self.last_generated_clip_id = self.current_clip = None
+            self._opening_frame_used = False
         elif kind == "command_error":
             logger.warning(
                 "[reactor] command refused: %s — %s",
@@ -180,10 +182,18 @@ class ReactorLink:
                 if self._config.model in OMNI_MODELS:
                     data = dict(data)
                     data.pop('reference_images', None)
+                    if self.creative_refs.get('images'):
+                        data['reference_images'] = list(self.creative_refs['images'])
+                    if self.creative_refs.get('audios'):
+                        data['reference_audios'] = list(self.creative_refs['audios'])
                     if (getattr(self._config, 'continue_scenes', False) and self.last_generated_clip_id
                             and 'continue_from_clip_id' not in data):
                         data['continue_from_clip_id'] = self.last_generated_clip_id
                         data['continue_mode'] = 'latent'
+                    if not self._opening_frame_used and not data.get('continue_from_clip_id'):
+                        for field, wire in (('firstFrame', 'first_frame_image'), ('lastFrame', 'last_frame_image')):
+                            if self.creative_refs.get(field):
+                                data[wire] = self.creative_refs[field][0]
                     if (self.starting_frame and not self._opening_frame_used
                             and 'reference_image' not in data and 'continue_from_clip_id' not in data):
                         data['reference_image'] = self.starting_frame
@@ -274,6 +284,7 @@ class ReactorLink:
         self.generation_clips = []
         self.playout_clips = []
         self.reference_images = []
+        self.creative_refs = {}
         self.starting_frame = None
         self._opening_frame_used = False
         for path in self._config.reference_paths:
@@ -283,6 +294,9 @@ class ReactorLink:
                 self.starting_frame = uploaded
             else:
                 self.reference_images.append(uploaded)
+        if self._config.model in OMNI_MODELS:
+            for field, paths in (getattr(self._config, 'creative_paths', None) or {}).items():
+                self.creative_refs[field] = [asdict(await reactor.upload_file(path)) for path in paths]
         if self._config.model in OMNI_MODELS:
             if await self._raw_command(reactor, 'set_canvas', {'aspect': '16:9'}) is None:
                 raise RuntimeError('FastH3 canvas setup was refused')
@@ -326,6 +340,7 @@ class ReactorLink:
     async def _teardown(self) -> None:
         self._ready.clear()
         self.reference_images = []
+        self.creative_refs = {}
         self.starting_frame = None
         self._opening_frame_used = False
         self.last_generated_clip_id = self.current_clip = None

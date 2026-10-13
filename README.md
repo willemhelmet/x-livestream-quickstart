@@ -44,9 +44,13 @@ Click **Save destination**. Saving credentials does not start generation or send
 
 ### 3. Choose your show
 
-**FastH3-Omni** is the default. Write a **Story premise**, optionally add **Visual & audio direction**, and choose a supported **Scene length**. Grok turns the premise into successive scenes as the show runs.
+**FastH3-Omni** is the default. Describe what your show is about, choose its visual direction and a supported scene length. Grok writes each next beat as the show runs. Expand **Camera & sound** for framing, camera movement, ambience, music and exact dialogue/voice direction.
 
-**Carry motion and sound into the next scene** uses the most recent generated clip as a latent continuation source. Turn it off for independent shots. Optionally upload an image and enable **Use image reference for opening clip** to guide its appearance; this reference is not an exact first frame.
+**Image & audio references** accepts up to nine ordered images and three audio clips (two when carrying scenes). Give each a role and description: character, object or location/look; voice, ambience or complete soundtrack. Audio must be 2–15 seconds, mono or stereo, and needs an image for the opening scene. A complete soundtrack suppresses generated sound/music/dialogue directions. Uploads are validated and saved locally; Reactor receives them only when generation starts. Grok receives their text descriptions, not the uploaded media.
+
+**Carry motion and sound into the next scene** uses the most recent generated clip as a latent continuation source. Turn it off for independent shots. Appearance and audio references remain attached to every scene. **Opening keyframes** can pin the first and/or last frame of the opening scene, alongside at least one appearance reference. These keyframes are not applied to later scenes; latent continuation cannot accept them. Frame-mode continuation and per-scene keyframe editing are not exposed in this continuous-show UI.
+
+**Inspect prompt structure** shows how your premise and directions are assembled with numbered `<Picture N>` and `<Audio N>` definitions. Grok writes the scene beat; the app attaches reference roles and camera/sound/music/dialogue directions deterministically. **Prompt for the current scene**, below the preview, shows the actual queued prompt once that scene plays. Large combinations of references and text can still exceed the deployment's request budget; the model remains the authority on admission.
 
 **Save show** stores your narrative settings on this computer without starting generation. The app also saves them when you start preview, and restores them when you reopen the dashboard.
 
@@ -108,15 +112,15 @@ Alternatively, set `REACTOR_API_KEY` and `XAI_API_KEY` in this repository's `.en
 
 The dashboard binds to `127.0.0.1` and has no account authentication. Keep it local—don't expose it through a tunnel or public server.
 
-Scene descriptions and reference images are sent to Reactor and xAI for generation. Video and audio are sent to X only after **Send to X**. Only X `*.pscp.tv` RTMPS endpoints on port 443 with the `/x` path are supported; TLS verification is enabled.
+Scene descriptions and creative direction are sent to Reactor and xAI. Uploaded image/audio references and keyframes go to Reactor; xAI receives their descriptions only. Video and audio are sent to X only after **Send to X**. Only X `*.pscp.tv` RTMPS endpoints on port 443 with the `/x` path are supported; TLS verification is enabled.
 
 </details>
 
 ## What's included
 
-A local narrative dashboard, Grok 4.7 scene writing and suggestion moderation, FastH3-Omni generation and clip continuation, optional opening reference, scene pacing, continuous generation, operator-relayed scene suggestions, live preview, and explicit RTMPS delivery to X.
+A local narrative dashboard, structured camera/sound/music/dialogue prompting, ordered image/audio references, opening keyframes, Grok 4.7 scene writing and suggestion moderation, FastH3-Omni clip continuation, scene pacing, continuous generation, operator-relayed scene suggestions, live preview, and explicit RTMPS delivery to X.
 
-The scope is intentionally focused: **generate a show and broadcast it**. Automatic X chat ingestion, hosted multi-user administration, and full-session recording are not included. Preview retains a rolling buffer of roughly two minutes. Credentials and narrative settings survive shutdown; after a server restart, upload any optional reference again and explicitly start preview and transmission.
+The scope is intentionally focused: **generate a show and broadcast it**. Automatic X chat ingestion, hosted multi-user administration, and full-session recording are not included. Preview retains a rolling buffer of roughly two minutes. Credentials, saved narrative settings and numbered reference uploads survive shutdown. After a server restart, explicitly start preview and transmission. The legacy single opening-reference control requires reuploading after a server restart; use the numbered reference library for new shows.
 
 FastH3-Omni uses the published model ID `reactor/fast-h3-omni`. The worker uses the Python `reactor-sdk` transport and follows the inspected `@reactor-models/fast-h3-omni` v0.2.0 wire contract: five supported durations, `reference_image`, `continue_from_clip_id` with latent continuation, `clip_seconds_choices` state, and the documented autoplay/canvas/flush commands. It uses direct sessions, rather than the batch-generation API. See the [FastH3-Omni overview](https://docs.reactor.inc/model-api-reference/fast-h3-omni/overview) and [schema](https://docs.reactor.inc/model-api-reference/fast-h3-omni/schema).
 

@@ -12,6 +12,8 @@ let thumbnailURL = null;
 let revision = 0;
 let storyLoaded = false;
 let storySessionId = null;
+let creativeDraft = {images:[], audios:[]};
+const directionFields = {camera:'cameraDirection', sound:'soundDirection', music:'musicDirection', dialogue:'dialogueDirection'};
 const playedURLs = new Set();
 
 function isActive() { return ACTIVE.has(studioStatus?.state); }
@@ -45,6 +47,7 @@ function readiness() {
     else if (selectedSource === 'h3' && !status.show) issue = 'Choose a reference image.';
     else if (selectedSource === 'fast_h3' && !$('#premise').value.trim()) issue = 'Write a story premise to start FastH3-Omni.';
     else if (selectedSource === 'fast_h3' && $('#useStartingFrame').checked && !status.show) issue = 'Choose a reference image.';
+    else if (selectedSource === 'fast_h3') issue = creativeIssue();
   }
   $('#setupMessage').textContent = issue;
   return !issue;
@@ -69,8 +72,11 @@ function renderControls() {
   $('#startingFrameRow').hidden = selectedSource !== 'fast_h3';
   $('#usageNote').textContent = selectedSource !== 'test_signal'
     ? 'Uses Reactor and xAI credits until you stop.' : 'No API usage.';
-  document.querySelectorAll('#model, #showFile, #premise, #visualStyle, #clipSeconds, #continueScenes, #useStartingFrame, #credentialsForm input, #saveKeys')
+  document.querySelectorAll('#model, #generationSettings input, #generationSettings textarea, #generationSettings select, #generationSettings button, #credentialsForm input, #saveKeys')
     .forEach(node => { node.disabled = locked || !online; });
+  const soundtrack = creativeDraft.audios.some(item => item.kind === 'soundtrack');
+  $('#soundtrackNote').hidden = !soundtrack;
+  for (const id of ['soundDirection', 'musicDirection', 'dialogueDirection']) $("#" + id).disabled = locked || !online || soundtrack;
   document.querySelectorAll('[data-clear-key]').forEach(node => {
     node.disabled = locked || !online || !studioStatus?.credentials?.[node.dataset.clearKey];
   });
@@ -91,8 +97,15 @@ function render(status) {
     $('#clipSeconds').value = String(status.story.clipSeconds);
     $('#continueScenes').checked = status.story.continueScenes;
     $('#useStartingFrame').checked = status.story.useStartingFrame;
+    const creative = status.story.creative || {};
+    for (const [field, id] of Object.entries(directionFields)) $('#' + id).value = creative[field] || '';
+    creativeDraft = {images:(creative.images || []).map(item => ({...item})), audios:(creative.audios || []).map(item => ({...item}))};
+    renderReferenceCards();
+    renderKeyframes(status.assets || [], creative.firstFrame || '', creative.lastFrame || '');
     storyLoaded = true; storySessionId = status.sessionId;
   }
+  if (!storyLoaded) renderKeyframes(status.assets || []);
+  $('#legacyReference').hidden = !status.show && !$('#useStartingFrame').checked;
   const keys = status.credentials || {};
   const missing = [];
   for (const [key, label, id] of [['XAI_API_KEY', 'xAI', '#xaiKeyState'], ['REACTOR_API_KEY', 'Reactor', '#reactorKeyState']]) {
@@ -105,6 +118,8 @@ function render(status) {
   if (status.state === 'failed') localError('Generation stopped unexpectedly. Check the server logs, then try again.');
   if (selectedSource === status.source && !currentURL && status.media?.segments?.length) playNextClip();
   const model = status.model || {};
+  $('#currentPromptDetails').hidden = !model.currentPrompt;
+  $('#currentPrompt').textContent = model.currentPrompt || '';
   const testSignal = isActive() && status.source === 'test_signal';
   $('#currentScene').textContent = testSignal ? 'Test signal' : model.currentScene
     || (isActive() ? (model.videoReceived ? 'Preparing the next scene…' : 'Writing the opening scene…') : 'Your story starts here.');
@@ -151,8 +166,85 @@ function storySettings() { return {
   premise:$('#premise').value,
   useStartingFrame:selectedSource === 'fast_h3' && $('#useStartingFrame').checked,
   style:$('#visualStyle').value.trim() || 'Natural motion, clear subjects, coherent camera and sound.',
-  clipSeconds:Number($('#clipSeconds').value), continueScenes:$('#continueScenes').checked
+  clipSeconds:Number($('#clipSeconds').value), continueScenes:$('#continueScenes').checked,
+  creative:{...Object.fromEntries(Object.entries(directionFields).map(([field, id]) => [field, $('#' + id).value.trim()])),
+    images:creativeDraft.images, audios:creativeDraft.audios, firstFrame:$('#firstFrame').value, lastFrame:$('#lastFrame').value}
 }; }
+
+function creativeIssue() {
+  if (creativeDraft.images.length > 9) return 'Use at most 9 image references.';
+  const maxAudio = $('#continueScenes').checked ? 2 : 3;
+  if (creativeDraft.audios.length > maxAudio) return `Use at most ${maxAudio} audio references with these continuation settings.`;
+  if ([...creativeDraft.images, ...creativeDraft.audios].some(item => !item.description.trim())) return 'Describe the role of every reference.';
+  if ((creativeDraft.audios.length || $('#firstFrame').value || $('#lastFrame').value) && !creativeDraft.images.length) return 'Add an image reference for audio or opening keyframes.';
+  if (creativeDraft.images.length && $('#useStartingFrame').checked) return 'Disable the saved opening appearance reference to use numbered images.';
+  if (creativeDraft.audios.filter(item => item.kind === 'soundtrack').length > 1) return 'Choose only one complete soundtrack.';
+  return '';
+}
+function renderReferenceCards() {
+  for (const field of ['images', 'audios']) {
+    const cards = creativeDraft[field].map((item, index) => {
+      const card = document.createElement('div'); card.className = 'reference-card';
+      const header = document.createElement('header');
+      const title = document.createElement('span'); title.textContent = `${field === 'images' ? 'Picture' : 'Audio'} ${index + 1}`;
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-button'; remove.textContent = 'Remove';
+      remove.setAttribute('aria-label', `Remove ${title.textContent}`);
+      remove.addEventListener('click', () => { creativeDraft[field].splice(index, 1); renderReferenceCards(); renderControls(); });
+      header.append(title, remove);
+      const role = document.createElement('select'); role.setAttribute('aria-label', `${title.textContent} role`);
+      const choices = field === 'images' ? [['person','Character'],['object','Object'],['scene','Location / look']] : [['voice','Voice'],['ambience','Ambience'],['soundtrack','Complete soundtrack']];
+      for (const [value, label] of choices) role.add(new Option(label, value));
+      role.value = item.kind; role.addEventListener('change', () => { item.kind = role.value; renderControls(); });
+      const description = document.createElement('textarea'); description.rows = 2; description.maxLength = 300;
+      description.setAttribute('aria-label', `${title.textContent} description`); description.value = item.description;
+      description.placeholder = field === 'images' ? 'Who or what is shown? E.g. Aki, the chef in a navy bandana.' : 'Whose voice, which ambience, or what soundtrack is this?';
+      description.addEventListener('input', () => { item.description = description.value; renderControls(); });
+      const media = document.createElement(field === 'images' ? 'img' : 'audio');
+      media.src = '/api/assets/' + item.id;
+      if (field === 'images') media.alt = title.textContent + ' reference';
+      else { media.controls = true; media.preload = 'none'; }
+      card.append(header, media, role, description); return card;
+    });
+    $('#' + (field === 'images' ? 'imageReferences' : 'audioReferences')).replaceChildren(...cards);
+  }
+}
+function renderKeyframes(assets, first = $('#firstFrame').value, last = $('#lastFrame').value) {
+  for (const [field, selected] of [['firstFrame',first],['lastFrame',last]]) {
+    const options = [new Option('Not pinned', '')];
+    assets.filter(asset => asset.type === 'image').forEach((asset, index) => options.push(new Option(`Uploaded image ${index + 1}`, asset.id)));
+    $('#' + field).replaceChildren(...options); $('#' + field).value = selected;
+  }
+}
+async function uploadReference(event, target) {
+  const file = event.target.files[0];
+  if (!file || busy || isActive()) return;
+  const type = target === 'audios' ? 'audio' : 'image';
+  if (file.size > (type === 'image' ? 10 : 20) * 1024 * 1024) { localError('Reference file is too large.'); event.target.value = ''; return; }
+  if ((target === 'images' && creativeDraft.images.length >= 9) || (target === 'audios' && creativeDraft.audios.length >= ($('#continueScenes').checked ? 2 : 3))) {
+    localError('Remove a reference before adding another.'); event.target.value = ''; return;
+  }
+  revision++; busy = true; renderControls();
+  try {
+    const status = await api('/api/assets', {method:'POST', headers:{'X-Studio-Control':'1','X-Asset-Type':type,'Content-Type':'application/octet-stream'}, body:file});
+    const asset = status.uploadedAsset;
+    if (target === 'images' || target === 'audios') {
+      creativeDraft[target].push({id:asset.id, kind:target === 'images' ? 'person' : 'voice', description:''});
+      if (target === 'images') $('#useStartingFrame').checked = false;
+      renderReferenceCards();
+    }
+    renderKeyframes(status.assets, target === 'firstFrame' ? asset.id : $('#firstFrame').value, target === 'lastFrame' ? asset.id : $('#lastFrame').value);
+    render(status);
+  } catch (error) { localError(error.message); }
+  finally { busy = false; event.target.value = ''; renderControls(); }
+}
+for (const [id, target] of [['imageReferenceFile','images'],['audioReferenceFile','audios'],['firstFrameFile','firstFrame'],['lastFrameFile','lastFrame']]) {
+  $('#' + id).addEventListener('change', event => uploadReference(event, target));
+}
+for (const id of ['continueScenes', 'firstFrame', 'lastFrame']) $('#' + id).addEventListener('change', renderControls);
+$('#inspectPrompt').addEventListener('click', async () => {
+  try { const result = await api('/api/prompt-preview', {method:'POST',headers:{'Content-Type':'application/json','X-Studio-Control':'1'},body:JSON.stringify(storySettings())}); $('#promptPreview').textContent = result.prompt; }
+  catch (error) { $('#promptPreview').textContent = error.message; }
+});
 $('#start').addEventListener('click', () => mutate('/api/start', {
   source:selectedSource, duration:null, confirmPaid:selectedSource !== 'test_signal', ...storySettings()
 }));

@@ -76,6 +76,23 @@ class FastServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((self.studio.run_dir / preset["reference_image"]).is_file())
         self.assertEqual(json.loads(show.read_text()), original)
 
+    async def test_creative_files_copied_in_order_into_worker_config(self):
+        payload = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
+        ids = [(await self.studio.upload_creative(payload,'image'))['uploadedAsset']['id'] for _ in range(2)]
+        creative = dict(camera='Locked medium shot', images=[dict(id=id,kind='person',description='Character ' + str(i)) for i,id in enumerate(ids)], firstFrame=ids[1])
+        with patch('server.shutil.which',return_value='ffmpeg'), patch.object(self.studio,'status',return_value={'capabilities':{'h3':True},'credentials':{'REACTOR_API_KEY':True,'XAI_API_KEY':True}}), patch('server.asyncio.create_subprocess_exec',side_effect=OSError):
+            with self.assertRaises(ValueError):
+                await self.studio.start(source='fast_h3',confirm_paid=True,premise='A scene',creative=creative)
+        path = self.studio.run_dir / 'fast-show.json'
+        config = load_preset(str(path))
+        self.assertEqual(config['narrative']['creative'], creative)
+        self.assertEqual([p.stem for p in config['creative_paths']['images']], ids)
+        self.assertEqual(config['creative_paths']['firstFrame'][0].stem,ids[1])
+        preset = json.loads(path.read_text())
+        preset['creative_files']['images'][0] = '../credentials.json'
+        path.write_text(json.dumps(preset))
+        with self.assertRaises(PresetError): load_preset(str(path))
+
 
 @unittest.skipIf(Config is None, "runtime dependencies unavailable: " + _IMPORT_ERROR)
 class FastConfigTests(unittest.TestCase):
@@ -215,6 +232,21 @@ class ReactorLinkFastTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(session.closed)
                     self.assertIsNone(link.starting_frame)
 
+        config = self.cfg(); config.creative_paths = {'images':[Path('image-1.png'),Path('image-2.png')], 'audios':[Path('voice.wav')]}
+        link = ReactorLink(config)
+        with patch('reactor_link.Reactor', Session):
+            handles = []
+            for _ in range(2):
+                task = asyncio.create_task(link._run_session())
+                try:
+                    await asyncio.wait_for(link._ready.wait(),2)
+                    self.assertEqual(sessions[-1].uploads, [Path('image-1.png'),Path('image-2.png'),Path('voice.wav')])
+                    handles.append(link.creative_refs['images'][0]['upload_id'])
+                finally:
+                    task.cancel(); await asyncio.gather(task,return_exceptions=True)
+                self.assertEqual(link.creative_refs,{})
+            self.assertNotEqual(handles[0],handles[1])
+
 
 @unittest.skipIf(compile_fast_moment is None, "runtime dependencies unavailable: " + _IMPORT_ERROR)
 class FastNarrativeTests(unittest.IsolatedAsyncioTestCase):
@@ -231,3 +263,58 @@ class FastNarrativeTests(unittest.IsolatedAsyncioTestCase):
             writer = FastNarrativeUpsampler(api_key="x", model="grok", style="s", narrative={"premise":"p"})
             group = await writer.upsample("idea", "a", "chat", 5, 10)
         self.assertEqual(group.title, "ok"); self.assertEqual(client.chat.completions.create.await_count, 2)
+
+    async def test_creative_prompt_preserves_roles_and_explicit_direction(self):
+        from creative import assemble_prompt, validate_creative
+        creative = validate_creative(dict(camera='Locked medium shot', sound='Rain on glass', music='No music',
+            dialogue='Aki says "Hello" in a low voice', images=[dict(id='a'*24, kind='person', description='Aki the chef')],
+            audios=[dict(id='b'*24, kind='voice', description='Voice of Aki in <Picture 1>')]))
+        response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({'title':'Welcome','prompt':'Aki serves soup.','seconds':8})))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(return_value=response))))
+        with patch('fast_narrative.grok_client', return_value=client):
+            writer = FastNarrativeUpsampler(api_key='fake', model='grok', style='Warm light', narrative={'premise':'A ramen shop','creative':creative})
+            group = await writer.upsample('', 'operator', 'idle', 8, 8, generated=True)
+        prompt = group.scenes[0].prompt
+        self.assertEqual(prompt, assemble_prompt('Aki serves soup.', 'Warm light', creative))
+        self.assertIn('<Picture 1> is the person reference: Aki the chef', prompt)
+        self.assertIn('<Audio 1> is the voice-timbre reference', prompt)
+        for text in ('Camera: Locked medium shot', 'Sound: Rain on glass', 'Music: No music', 'Dialogue: Aki says "Hello"'):
+            self.assertIn(text, prompt)
+        context = json.loads(client.chat.completions.create.call_args.kwargs['messages'][1]['content'])
+        self.assertEqual(context['show']['creative']['images'][0]['label'], '<Picture 1>')
+        self.assertNotIn('id', context['show']['creative']['images'][0])
+
+    def test_reference_constraints_and_soundtrack_precedence(self):
+        from creative import assemble_prompt, validate_creative
+        image = dict(id='a'*24, kind='scene', description='A pottery workshop')
+        audio = dict(id='b'*24, kind='soundtrack', description='Soft rain and piano')
+        for invalid in ({'audios':[audio]}, {'firstFrame':'a'*24}, {'images':[image]*10},
+                        {'images':[dict(image, id='../private')]}, {'images':[dict(image, description='')]},
+                        {'images':[image], 'audios':[dict(audio,id=f'{i:024x}') for i in range(3)]}):
+            with self.assertRaises(ValueError): validate_creative(invalid)
+        valid = validate_creative({'images':[image], 'audios':[audio], 'sound':'Ignored rain','music':'Ignored brass','dialogue':'Ignored voice'})
+        prompt = assemble_prompt('A cup spins.', 'Warm', valid)
+        self.assertIn('complete audio track, reused unchanged', prompt)
+        for label in ('Sound:', 'Music:', 'Dialogue:'):
+            self.assertNotIn(label, prompt)
+        validate_creative({'images':[image], 'audios':[dict(audio,kind='voice',id=f'{i:024x}') for i in range(3)]}, continuation=False)
+
+    async def test_ordered_refs_and_opening_keyframes_on_wire(self):
+        cfg = SimpleNamespace(model=FAST_MODEL, reference_paths=[], continue_scenes=True)
+        link = ReactorLink(cfg); link._ready.set()
+        link._reactor = SimpleNamespace(send_command=AsyncMock(return_value={'type':'clip_queued','data':{'clip':{'clip_id':'one'}}}))
+        link.creative_refs = {'images':[{'upload_id':'i1'},{'upload_id':'i2'}], 'audios':[{'upload_id':'a1'}],
+                              'firstFrame':[{'upload_id':'first'}], 'lastFrame':[{'upload_id':'last'}]}
+        await link.send_command('enqueue', {'prompt':'Opening','seconds':8})
+        first = link._reactor.send_command.call_args.args[1]
+        self.assertEqual(first['reference_images'], [{'upload_id':'i1'},{'upload_id':'i2'}])
+        self.assertEqual(first['reference_audios'], [{'upload_id':'a1'}])
+        self.assertEqual(first['first_frame_image'], {'upload_id':'first'})
+        self.assertEqual(first['last_frame_image'], {'upload_id':'last'})
+        link._on_message({'type':'clip_generated','data':{'clip':{'clip_id':'one'}}})
+        await link.send_command('enqueue', {'prompt':'Continue','seconds':8})
+        next_clip = link._reactor.send_command.call_args.args[1]
+        self.assertEqual(next_clip['continue_mode'], 'latent')
+        self.assertEqual(next_clip['reference_images'], first['reference_images'])
+        self.assertEqual(next_clip['reference_audios'], first['reference_audios'])
+        self.assertNotIn('first_frame_image', next_clip); self.assertNotIn('last_frame_image', next_clip)

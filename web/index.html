@@ -51,6 +51,7 @@
           <div><h2>Now playing</h2><p id="currentScene" class="scene-title">Your story starts here.</p><p id="modelStatus" class="help" role="status">FastH3-Omni</p></div>
           <div><h2>Coming up</h2><ul id="comingUp" class="scene-queue"><li>No scenes queued yet.</li></ul><p id="queueStatus" class="help"></p></div>
         </section>
+        <details id="currentPromptDetails" hidden><summary>Prompt for the current scene</summary><pre id="currentPrompt"></pre></details>
       </section>
       <aside class="setup" aria-label="Stream settings">
         <div class="setup-heading"><h2 class="setup-title">Build a narrative</h2><button id="saveStory" class="text-button" type="button" disabled>Save show</button></div>
@@ -61,16 +62,53 @@
         </select>
         <p id="storyFeedback" class="help" role="status" aria-live="polite"></p>
         <div id="generationSettings">
+          <label class="field-label" for="premise">What is your show about?</label>
+          <textarea id="premise" maxlength="2000" rows="5" placeholder="A tiny late-night ramen shop in rainy Tokyo. Follow the chef as unusual visitors arrive, each with a story to tell."></textarea>
+          <label class="field-label" for="visualStyle">Visual direction</label>
+          <textarea id="visualStyle" maxlength="2000" rows="2" placeholder="Warm practical light, cinematic realism, natural motion."></textarea>
+          <details class="creative-details">
+            <summary>Camera &amp; sound</summary>
+            <label class="field-label" for="cameraDirection">Camera &amp; framing</label>
+            <textarea id="cameraDirection" maxlength="1000" rows="2" placeholder="Eye-level medium shot; a slow push toward the counter."></textarea>
+            <label class="field-label" for="soundDirection">Ambience &amp; sound effects</label>
+            <textarea id="soundDirection" maxlength="1000" rows="2" placeholder="Rain on the window, bowls clinking, steam hissing."></textarea>
+            <label class="field-label" for="musicDirection">Music</label>
+            <textarea id="musicDirection" maxlength="1000" rows="2" placeholder="Soft instrumental jazz, no vocals. Or: no music."></textarea>
+            <label class="field-label" for="dialogueDirection">Dialogue &amp; voices</label>
+            <textarea id="dialogueDirection" maxlength="1000" rows="2" placeholder='The chef says “Welcome back” in a warm, low voice. Or: no dialogue.'></textarea>
+            <p class="help" id="soundtrackNote" hidden>A complete soundtrack replaces generated sound, music and dialogue direction.</p>
+          </details>
+          <details class="creative-details">
+            <summary>Image &amp; audio references</summary>
+            <p class="help">Define characters, objects and locations with images. Describe each audio clip’s role. Numbering stays in upload order for every scene.</p>
+            <div id="imageReferences"></div>
+            <label class="upload">Add image<input id="imageReferenceFile" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Add image reference"></label>
+            <div id="audioReferences"></div>
+            <label class="upload">Add audio<input id="audioReferenceFile" type="file" accept=".wav,.mp3,.aac,.m4a,.ogg,.opus,.flac,.webm" aria-label="Add audio reference"></label>
+            <p class="help">Up to 9 images. Audio: 2–15 seconds, mono or stereo; up to 2 clips when carrying scenes, otherwise 3. Audio needs an image for the opening scene. Uploads stay local until you start generation.</p>
+          </details>
+          <details class="creative-details">
+            <summary>Opening keyframes</summary>
+            <p class="help">Pin the first and/or last frame of the opening scene. Requires an image reference above. Later scenes use continuation without these keyframes.</p>
+            <label class="field-label" for="firstFrame">First frame</label><select id="firstFrame"><option value="">Not pinned</option></select>
+            <label class="upload">Upload first frame<input id="firstFrameFile" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Upload opening first frame"></label>
+            <label class="field-label" for="lastFrame">Last frame</label><select id="lastFrame"><option value="">Not pinned</option></select>
+            <label class="upload">Upload last frame<input id="lastFrameFile" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Upload opening last frame"></label>
+          </details>
+          <details id="legacyReference" hidden><summary>Saved opening appearance reference</summary>
           <div class="show-row">
             <div class="show-thumb" id="showThumb" aria-hidden="true">+</div>
             <div><label id="imageLabel" class="field-label" for="showFile">Reference image</label><p id="showMeta">PNG, JPEG or WebP</p></div>
             <label class="upload">Choose<input id="showFile" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose reference image"></label>
           </div>
           <label id="startingFrameRow" class="starting-frame" hidden><input id="useStartingFrame" type="checkbox">Use image reference for opening clip</label>
-          <label class="field-label" for="premise">Story premise</label>
-          <textarea id="premise" maxlength="2000" rows="5" placeholder="A tiny late-night ramen shop in rainy Tokyo. Follow the chef as unusual visitors arrive, each with a story to tell."></textarea>
-          <label class="field-label" for="visualStyle">Visual &amp; audio direction</label>
-          <textarea id="visualStyle" maxlength="2000" rows="3" placeholder="Natural motion, clear subjects, coherent camera and sound."></textarea>
+          <p class="help">This guides appearance; it does not pin the first frame. Use numbered references instead for audio and keyframes.</p>
+          </details>
+          <details class="creative-details"><summary>Inspect prompt structure</summary>
+            <p class="help">This uses your premise as an example beat. Grok writes each next beat, then the same reference definitions and creative directions are attached.</p>
+            <button id="inspectPrompt" type="button" class="text-button">Refresh prompt</button>
+            <pre id="promptPreview">Write your premise to inspect the prompt.</pre>
+          </details>
           <label class="field-label" for="clipSeconds">Scene length</label>
           <select id="clipSeconds">
             <option value="5.875">5.875 seconds</option>

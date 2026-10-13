@@ -24,10 +24,12 @@ from aiohttp import web
 from dotenv import dotenv_values
 from publisher import Publisher, validate_destination
 from runtime.omni_contract import MODEL_NAME as FAST_MODEL, CLIP_SECONDS, DEFAULT_CLIP_SECONDS, DEFAULT_STYLE
+from runtime.creative import validate_creative, assemble_prompt
 
 ROOT = Path(__file__).resolve().parent
 MODEL = 'reactor/h3-reference-to-video-turbo-realtime'
 MAX_IMAGE = 10 * 1024 * 1024
+MAX_ASSET = 20 * 1024 * 1024
 CONTROLLER = web.AppKey('controller', object)
 KEY_NAMES = ('REACTOR_API_KEY', 'XAI_API_KEY')
 
@@ -42,7 +44,7 @@ def validate_keys(value):
 
 
 def validate_story(value):
-    fields = {'premise', 'style', 'clipSeconds', 'continueScenes', 'useStartingFrame'}
+    fields = {'premise', 'style', 'clipSeconds', 'continueScenes', 'useStartingFrame', 'creative'}
     if not isinstance(value, dict) or set(value) - fields:
         raise ValueError('Provide story settings only.')
     premise, style = value.get('premise'), value.get('style', DEFAULT_STYLE)
@@ -56,8 +58,12 @@ def validate_story(value):
         raise ValueError('Choose a supported FastH3-Omni scene length.')
     if type(continuation) is not bool or type(reference) is not bool:
         raise ValueError('Scene continuation and opening reference must be enabled or disabled.')
-    return dict(premise=premise.strip(), style=style.strip() or DEFAULT_STYLE, clipSeconds=seconds,
-                continueScenes=continuation, useStartingFrame=reference)
+    story = dict(premise=premise.strip(), style=style.strip() or DEFAULT_STYLE, clipSeconds=seconds,
+                 continueScenes=continuation, useStartingFrame=reference)
+    creative = validate_creative(value.get('creative', {}), continuation=continuation, opening_reference=reference)
+    if creative:
+        story['creative'] = creative
+    return story
 
 
 def test_signal_command(directory: Path, duration: int | None) -> list[str]:
@@ -105,6 +111,8 @@ class Studio:
         self.counts = dict(messagesReceived=0, accepted=0, ignored=0, deferred=0)
         self.last_accepted = 0.0
         self.story_file = self.directory / 'story.json'
+        self.asset_dir = self.directory / 'assets'
+        self.asset_dir.mkdir(mode=0o700, exist_ok=True)
         self.story = None
         if self.story_file.is_file() and not self.story_file.is_symlink():
             try:
@@ -125,6 +133,15 @@ class Studio:
         text = self.redact(text)
         self.logs.append(dict(at=time.time(), level=level, message=text[:1500]))
         self.logs = self.logs[-100:]
+
+    def redact_value(self, value):
+        if isinstance(value, str):
+            return self.redact(value)
+        if isinstance(value, dict):
+            return {key: self.redact_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self.redact_value(item) for item in value]
+        return value
 
     def segments(self):
         if not self.run_dir or not (self.run_dir / 'clips.csv').exists():
@@ -157,7 +174,7 @@ class Studio:
             return result
         path = self.run_dir / 'model-status.json'
         try:
-            if path.is_symlink() or path.stat().st_size > 16_384:
+            if path.is_symlink() or path.stat().st_size > 65_536:
                 return result
             value = json.loads(path.read_text())
             if not isinstance(value, dict):
@@ -173,6 +190,8 @@ class Studio:
                     result[key] = count
             if isinstance(value.get('currentScene'), str):
                 result['currentScene'] = self.redact(value['currentScene'])[:120]
+            if isinstance(value.get('currentPrompt'), str):
+                result['currentPrompt'] = self.redact(value['currentPrompt'])[:16000]
             if isinstance(value.get('comingUp'), list):
                 result['comingUp'] = [self.redact(title)[:120] for title in value['comingUp'][:3]
                                       if isinstance(title, str)]
@@ -191,8 +210,8 @@ class Studio:
                     credentials={key: bool(self.env.get(key)) for key in KEY_NAMES},
                     writer=dict(provider='xAI', model='grok-4.7', verified=False),
                     model=self.model_status(),
-                    story={key: self.redact(value) if isinstance(value, str) else value
-                           for key, value in self.story.items()} if self.story else None,
+                    story=self.redact_value(self.story) if self.story else None,
+                    assets=self.creative_assets(),
                     show=self.show, logs=self.logs[-60:], events=self.events[-50:], metrics=self.counts,
                     x=dict(serverUrl=self.destination['serverUrl'], hasStreamKey=bool(self.destination['streamKey']),
                            configured=bool(self.destination['streamKey'] and self.destination['serverUrl']),
@@ -232,6 +251,77 @@ class Studio:
             await self.publisher.stop()
             return self.status()
 
+    def creative_assets(self):
+        return [dict(id=path.stem, type='image' if path.suffix in ('.png', '.jpg', '.webp') else 'audio')
+                for path in sorted(self.asset_dir.iterdir())
+                if re.fullmatch(r'[a-f0-9]{24}\.(png|jpg|webp|wav|mp3|aac|m4a|ogg|flac|webm)', path.name)
+                and path.is_file() and not path.is_symlink()]
+
+    def resolve_creative(self, creative):
+        available = {asset['id']: asset for asset in self.creative_assets()}
+        result = {}
+        for field in ('images', 'audios', 'firstFrame', 'lastFrame'):
+            ids = [item['id'] for item in creative.get(field, [])] if field in ('images', 'audios') else ([creative[field]] if creative.get(field) else [])
+            for asset_id in ids:
+                asset = available.get(asset_id)
+                if not asset or asset['type'] != ('audio' if field == 'audios' else 'image'):
+                    raise ValueError('A selected reference is missing or has the wrong media type. Upload it again.')
+                path = next(self.asset_dir.glob(asset_id + '.*'))
+                if path.is_symlink() or not path.resolve().is_relative_to(self.asset_dir.resolve()):
+                    raise ValueError('Invalid reference file.')
+                result.setdefault(field, []).append(path)
+        return result
+
+    async def upload_creative(self, payload, kind):
+        async with self.lock:
+            if self.process and self.process.returncode is None:
+                raise ValueError('Stop generation before changing references.')
+            if kind not in ('image', 'audio') or not payload or len(payload) > MAX_ASSET:
+                raise ValueError('Choose an image or audio file under 20 MB.')
+            if len(self.creative_assets()) >= 100:
+                raise ValueError('Local reference library is full (100 files).')
+            if kind == 'image':
+                from PIL import Image
+                if len(payload) > MAX_IMAGE:
+                    raise ValueError('Images must be under 10 MB.')
+                try:
+                    with Image.open(io.BytesIO(payload)) as image:
+                        extension = {'PNG': 'png', 'JPEG': 'jpg', 'WEBP': 'webp'}.get(image.format)
+                        if not extension or image.width * image.height > 25_000_000:
+                            raise ValueError('Use PNG, JPEG or WebP under 25 megapixels.')
+                        image.verify()
+                except (OSError, Image.DecompressionBombError):
+                    raise ValueError('Upload a valid PNG, JPEG or WebP image.') from None
+            else:
+                descriptor, temporary = tempfile.mkstemp(dir=self.asset_dir, prefix='.audio-')
+                try:
+                    with os.fdopen(descriptor, 'wb') as stream:
+                        stream.write(payload)
+                    process = await asyncio.create_subprocess_exec('ffprobe', '-v', 'error', '-protocol_whitelist', 'file,pipe',
+                        '-show_format', '-show_streams', '-of', 'json', temporary,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                    try:
+                        stdout, _ = await asyncio.wait_for(process.communicate(), 10)
+                    except asyncio.TimeoutError:
+                        process.kill(); await process.wait()
+                        raise ValueError('Audio validation timed out.') from None
+                    info = json.loads(stdout) if process.returncode == 0 else {}
+                    tracks = info.get('streams', [])
+                    format_name = info.get('format', {}).get('format_name', '').split(',')[0]
+                    extension = {'wav': 'wav', 'mp3': 'mp3', 'aac': 'aac', 'mov': 'm4a', 'ogg': 'ogg', 'flac': 'flac', 'matroska': 'webm'}.get(format_name)
+                    seconds = float(info.get('format', {}).get('duration', 0))
+                    if (not extension or not 2 <= seconds <= 15 or len(tracks) != 1
+                            or tracks[0].get('codec_type') != 'audio' or tracks[0].get('channels') not in (1, 2)):
+                        raise ValueError('Use a 2–15 second mono/stereo WAV, MP3, AAC/M4A, OGG, FLAC or WebM audio clip.')
+                finally:
+                    Path(temporary).unlink(missing_ok=True)
+            asset_id = secrets.token_hex(12)
+            target = self.asset_dir / f'{asset_id}.{extension}'
+            with target.open('xb') as stream:
+                stream.write(payload)
+            os.chmod(target, 0o600)
+            return dict(self.status(), uploadedAsset=dict(id=asset_id, type=kind))
+
     def write_story(self, story):
         descriptor, temporary = tempfile.mkstemp(prefix='.story-', dir=self.directory)
         try:
@@ -244,6 +334,7 @@ class Studio:
 
     async def save_story(self, value):
         story = validate_story(value)
+        self.resolve_creative(story.get('creative', {}))
         async with self.lock:
             if self.phase in ('starting', 'running', 'stopping'):
                 raise ValueError('Stop the show before changing its settings.')
@@ -287,7 +378,7 @@ class Studio:
             return self.status()
 
     async def start(self, source='test_signal', duration=None, confirm_paid=False, premise=None, use_starting_frame=False,
-                    style=DEFAULT_STYLE, clip_seconds=DEFAULT_CLIP_SECONDS, continue_scenes=True):
+                    style=DEFAULT_STYLE, clip_seconds=DEFAULT_CLIP_SECONDS, continue_scenes=True, creative=None):
         async with self.lock:
             opening_image = None
             if self.process and self.process.returncode is None:
@@ -307,7 +398,9 @@ class Studio:
                     raise ValueError('Install requirements.txt and add Reactor and xAI keys under API keys.')
             if source == 'fast_h3':
                 story = validate_story(dict(premise=premise, style=style, clipSeconds=clip_seconds,
-                                            continueScenes=continue_scenes, useStartingFrame=use_starting_frame))
+                                            continueScenes=continue_scenes, useStartingFrame=use_starting_frame,
+                                            creative=creative if creative is not None else {}))
+                creative_paths = self.resolve_creative(story.get('creative', {}))
                 premise, style = story['premise'], story['style']
                 if use_starting_frame and not self.show_path:
                     raise ValueError('Choose a reference image, or turn off Use image reference for opening clip.')
@@ -355,6 +448,18 @@ class Studio:
                 fast_show = dict(version=1, model=FAST_MODEL,
                                  style=style.strip(), clip_seconds=clip_seconds,
                                  continue_scenes=continue_scenes, narrative={'premise': premise.strip()})
+                if story.get('creative'):
+                    fast_show['narrative']['creative'] = story['creative']
+                    fast_show['creative_files'] = {}
+                    for field, paths in creative_paths.items():
+                        copied = []
+                        for path in paths:
+                            destination = self.run_dir / 'references' / path.name
+                            destination.parent.mkdir(mode=0o700, exist_ok=True)
+                            shutil.copyfile(path, destination)
+                            os.chmod(destination, 0o600)
+                            copied.append(str(destination.relative_to(self.run_dir)))
+                        fast_show['creative_files'][field] = copied
                 if opening_image:
                     destination = self.run_dir / 'references' / ('character-1' + opening_image.suffix)
                     destination.parent.mkdir(mode=0o700)
@@ -526,11 +631,11 @@ def create_app(directory=None, env=None):
                                  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self' data:; img-src 'self' blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'"})
         return response
 
-    app = web.Application(middlewares=[boundary], client_max_size=MAX_IMAGE)
+    app = web.Application(middlewares=[boundary], client_max_size=MAX_ASSET)
     app[CONTROLLER] = studio
 
     async def body(request):
-        if request.content_length is None or request.content_length > 8192:
+        if request.content_length is None or request.content_length > 32768:
             raise ValueError('Send a small JSON object.')
         value = await request.json()
         if not isinstance(value, dict):
@@ -544,9 +649,25 @@ def create_app(directory=None, env=None):
             data.get('source', 'test_signal'), data.get('duration'), data.get('confirmPaid', False),
             data.get('premise'), data.get('useStartingFrame', False),
             data.get('style', DEFAULT_STYLE), data.get('clipSeconds', DEFAULT_CLIP_SECONDS),
-            data.get('continueScenes', True)))
+            data.get('continueScenes', True), data.get('creative', {})))
     async def stop(request): return web.json_response(await studio.stop())
     async def story(request): return web.json_response(await studio.save_story(await body(request)))
+    async def prompt_preview(request):
+        settings = validate_story(await body(request))
+        return web.json_response({'prompt': studio.redact(assemble_prompt(settings['premise'], settings['style'],
+            settings.get('creative', {}), opening_reference=settings['useStartingFrame']))})
+    async def creative_upload(request):
+        return web.json_response(await studio.upload_creative(await request.read(), request.headers.get('X-Asset-Type', 'image')))
+    async def creative_media(request):
+        asset_id = request.match_info['id']
+        if not re.fullmatch(r'[a-f0-9]{24}', asset_id):
+            raise web.HTTPNotFound()
+        matches = [asset for asset in studio.creative_assets() if asset['id'] == asset_id]
+        if not matches:
+            raise web.HTTPNotFound()
+        path = studio.resolve_creative({'images' if matches[0]['type'] == 'image' else 'audios':
+            [dict(id=asset_id)]})
+        return web.FileResponse(next(iter(path.values()))[0])
     async def chat(request):
         data = await body(request)
         return web.json_response(studio.chat(data.get('text'), data.get('author', 'operator')))
@@ -574,6 +695,8 @@ def create_app(directory=None, env=None):
     async def cleanup(app): await studio.stop()
     app.add_routes([web.get('/', asset), web.get('/api/status', status), web.post('/api/start', start),
                     web.post('/api/story', story),
+                    web.post('/api/prompt-preview', prompt_preview), web.post('/api/assets', creative_upload),
+                    web.get('/api/assets/{id}', creative_media),
                     web.post('/api/credentials', credentials),
                     web.post('/api/x/destination', destination), web.post('/api/x/start', send_to_x),
                     web.post('/api/x/stop', stop_x),
