@@ -1,10 +1,10 @@
 ![Infinite X Livestream — Reactor livestream quickstart](https://inc-reactor-static.b-cdn.net/assets/repo-banners/x-livestream-quickstart/infinite-x-livestream-fcf792e6cfc1.png)
 
-# MiniMax H3 Livestreams on X
+# FastH3-Omni Livestreams on X
 
-Your one-stop shop for running MiniMax H3 livestreams on X. Describe a scene, choose your model, and send generated video and audio straight to your X Live Studio source—all from one browser dashboard.
+Run a continuous FastH3-Omni show on X. Describe a scene, preview generated video and audio locally, relay audience ideas into the show, and explicitly send the feed to your X Live Studio source.
 
-[Reactor](https://reactor.inc) powers H3 generation. Grok 4.7 writes the scene directions. The built-in encoder handles delivery to X. Run it on your computer: no GPU, OBS setup, or cloud deployment required.
+[Reactor](https://reactor.inc) powers generation. Grok 4.7 writes scene directions and reviews incoming suggestions. The built-in encoder handles delivery to X. Run it on your computer: no GPU, OBS setup, or cloud deployment required.
 
 ## Go live
 
@@ -46,7 +46,7 @@ Click **Save destination**. Saving credentials does not start generation or send
 
 Choose a model and describe what you want on screen:
 
-- **FastH3:** start with a scene description. Optionally upload an image and enable **Use starting frame** to anchor the opening clip.
+- **FastH3-Omni:** start with a scene description. Optionally upload an image and enable **Use image reference for opening clip** to guide its appearance. The image is not an exact first frame.
 - **H3 Turbo Realtime:** upload a reference image, then add an optional scene description.
 
 For example:
@@ -66,6 +66,10 @@ In X Live Studio, create or open a broadcast using **the same source**. Verify t
 **Already have an active broadcast on that source? Your video may reach viewers as soon as you confirm Send to X.** This dashboard sends the feed; broadcast creation, visibility, scheduling, and ending the broadcast are managed in X.
 
 You're streaming. Leave the dashboard and Python worker running, and keep an eye on the incoming feed in X Live Studio.
+
+### Let viewers shape future scenes
+
+The dashboard's **Audience scene suggestions** box relays ideas to the running model worker. Paste in a viewer's idea from X, or type one yourself; Grok reviews it before it can shape a future clip. “Queued” means sent for review—not approved or already on air. Watch the worker log and preview to confirm the result. **X Live Studio comments and X Post replies are not ingested automatically.** This quickstart uses a deliberate manual relay; it does not require an X Developer App or pretend to read livestream chat.
 
 ## Look before you leap
 
@@ -106,11 +110,11 @@ Scene descriptions and reference images are sent to Reactor and xAI for generati
 
 ## What's included
 
-A local dashboard, Grok 4.7 scene writing, two Reactor H3 adapters, reference-image upload, continuous generation, live preview, and explicit RTMPS delivery to X.
+A local dashboard, Grok 4.7 scene writing and suggestion moderation, FastH3-Omni and H3 Turbo Realtime adapters, reference-image upload, continuous generation, operator-relayed scene suggestions, live preview, and explicit RTMPS delivery to X.
 
-The scope is intentionally focused: **generate a show and broadcast it**. Audience-chat control, hosted multi-user administration, and full-session recording are not included. Preview retains a rolling buffer of roughly two minutes; saved credentials and recent clips survive shutdown, but the selected show must be set up again after a server restart.
+The scope is intentionally focused: **generate a show and broadcast it**. Automatic X chat ingestion, hosted multi-user administration, and full-session recording are not included. Preview retains a rolling buffer of roughly two minutes; saved credentials and recent clips survive shutdown, but the selected show must be set up again after a server restart.
 
-FastH3's optional starting image anchors the first queued clip; subsequent clips are text-driven, not automatically frame-chained. Model references: [FastH3 overview](https://docs.reactor.inc/model-api-reference/fast-h3/overview) and [schema](https://docs.reactor.inc/model-api-reference/fast-h3/schema).
+FastH3-Omni uses the published model ID `reactor/fast-h3-omni`. Its optional opening reference guides appearance in the first queued clip; subsequent clips are text-driven, not automatically frame-chained. The Python worker follows the published `@reactor-models/fast-h3-omni` v0.2.0 contract: five supported durations, `reference_image` (not a first-frame field), `clip_seconds_choices` state, and the documented autoplay/canvas/flush commands. See the [FastH3-Omni overview](https://docs.reactor.inc/model-api-reference/fast-h3-omni/overview) and [schema](https://docs.reactor.inc/model-api-reference/fast-h3-omni/schema).
 
 ## Development
 

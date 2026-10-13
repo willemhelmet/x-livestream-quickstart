@@ -26,7 +26,7 @@ from publisher import Publisher, validate_destination
 
 ROOT = Path(__file__).resolve().parent
 MODEL = 'reactor/h3-reference-to-video-turbo-realtime'
-FAST_MODEL = 'reactor/fast-h3'
+FAST_MODEL = 'reactor/fast-h3-omni'
 MAX_IMAGE = 10 * 1024 * 1024
 CONTROLLER = web.AppKey('controller', object)
 KEY_NAMES = ('REACTOR_API_KEY', 'XAI_API_KEY')
@@ -177,6 +177,8 @@ class Studio:
         result.update(PYTHONUNBUFFERED='1', PYTHON_DOTENV_DISABLED='1',
                       PREVIEW_DIR=str(self.run_dir), SINK='preview',
                       REACTOR_MODEL=FAST_MODEL if self.source == 'fast_h3' else MODEL)
+        if self.source in ('h3', 'fast_h3'):
+            result['LOCAL_CHAT_INBOX'] = str(self.run_dir / 'chat-inbox.jsonl')
         return result
 
     async def save_keys(self, updates):
@@ -209,7 +211,7 @@ class Studio:
                 raise ValueError('A rehearsal is already running. Stop it before starting another.')
             await self.publisher.stop()
             if source not in ('test_signal', 'h3', 'fast_h3'):
-                raise ValueError('Choose Test signal, H3 Turbo Realtime or FastH3.')
+                raise ValueError('Choose Test signal, H3 Turbo Realtime or FastH3-Omni.')
             if duration is not None and (type(duration) is not int or not 5 <= duration <= 300):
                 raise ValueError('Use no duration for continuous playback, or 5–300 seconds for a timed check.')
             if not shutil.which('ffmpeg'):
@@ -222,20 +224,20 @@ class Studio:
                     raise ValueError('Install requirements.txt and add Reactor and xAI keys under API keys.')
             if source == 'fast_h3':
                 if not isinstance(premise, str) or not premise.strip() or len(premise) > 2000:
-                    raise ValueError('Describe a scene in 1–2,000 characters for FastH3.')
+                    raise ValueError('Describe a scene in 1–2,000 characters for FastH3-Omni.')
                 if type(use_starting_frame) is not bool:
                     raise ValueError('Starting frame must be enabled or disabled.')
                 if use_starting_frame and not self.show_path:
-                    raise ValueError('Choose a starting image, or turn off Use starting frame.')
+                    raise ValueError('Choose a reference image, or turn off Use image reference for opening clip.')
                 if use_starting_frame:
                     original = json.loads(self.show_path.read_text())
                     reference = (original['images'][0]['reference'] if original.get('version') == 3
                                  else original['narrative']['characters'][0]['reference'])
                     if not isinstance(reference, str) or not re.fullmatch(r'references/character-1\.(png|jpg|webp)', reference):
-                        raise ValueError('Upload the starting image again.')
+                        raise ValueError('Upload the reference image again.')
                     opening_image = (self.show_path.parent / reference).resolve()
                     if not opening_image.is_relative_to(self.show_path.parent / 'references') or not opening_image.is_file():
-                        raise ValueError('Upload the starting image again.')
+                        raise ValueError('Upload the reference image again.')
             if source == 'h3':
                 if not self.show_path:
                     raise ValueError('Upload a reference image first.')
@@ -259,6 +261,7 @@ class Studio:
             self.session_id = secrets.token_hex(12)
             self.run_dir = self.directory / 'runs' / self.session_id
             self.run_dir.mkdir(parents=True, mode=0o700)
+            (self.run_dir / 'chat-inbox.jsonl').touch(mode=0o600)
             self.source, self.duration = source, duration
             self.logs, self.events = [], []
             self.counts = dict(messagesReceived=0, accepted=0, ignored=0, deferred=0)
@@ -273,7 +276,7 @@ class Studio:
                     destination = self.run_dir / 'references' / ('character-1' + opening_image.suffix)
                     destination.parent.mkdir(mode=0o700)
                     shutil.copyfile(opening_image, destination)
-                    fast_show['starting_frame'] = str(destination.relative_to(self.run_dir))
+                    fast_show['reference_image'] = str(destination.relative_to(self.run_dir))
                 worker_preset = self.run_dir / 'fast-show.json'
                 worker_preset.write_text(json.dumps(fast_show))
             if source in ('h3', 'fast_h3'):
@@ -282,7 +285,7 @@ class Studio:
             self.phase, self.started_at, self.ended_at = 'starting', time.time(), None
             self.log('Preview started. Runs until stopped.' if duration is None else 'Preview started. Auto-stop in %s seconds.' % duration)
             self.log('Synthetic test signal; no AI/API calls.' if source == 'test_signal'
-                     else f'{"FastH3" if source == "fast_h3" else "H3 Turbo Realtime"} + Grok 4.7 API calls enabled. Output stays local.')
+                     else f'{"FastH3-Omni" if source == "fast_h3" else "H3 Turbo Realtime"} + Grok 4.7 API calls enabled. Output stays local.')
             try:
                 self.process = await asyncio.create_subprocess_exec(
                     *command, cwd=ROOT, env=self.child_env(), stdout=asyncio.subprocess.PIPE,
@@ -356,23 +359,32 @@ class Studio:
                 self.phase = 'stopped'
             return self.status()
 
-    def chat(self, text):
+    def chat(self, text, author='operator'):
         if not isinstance(text, str) or not text.strip() or len(text) > 500:
-            raise ValueError('Enter a chat message of 1–500 characters.')
-        if self.phase not in ('starting', 'running'):
-            raise ValueError('Start a rehearsal before testing chat.')
+            raise ValueError('Enter a scene suggestion of 1–500 characters.')
+        if not isinstance(author, str) or not 1 <= len(author.strip()) <= 50:
+            raise ValueError('Enter an author of 1–50 characters.')
+        if self.phase != 'running' or self.source == 'test_signal':
+            raise ValueError('Start a model preview before adding a scene suggestion.')
+        if not self.run_dir or not self.process or self.process.returncode is not None:
+            raise ValueError('The model worker is not running.')
+        if time.monotonic() - self.last_accepted < 10:
+            raise ValueError('Wait 10 seconds before sending another scene suggestion.')
+        inbox = self.run_dir / 'chat-inbox.jsonl'
+        if inbox.is_symlink() or not inbox.is_file():
+            raise ValueError('The local suggestion inbox is unavailable.')
+        line = (json.dumps({'text': text.strip(), 'author': author.strip(), 'source': 'operator'},
+                           ensure_ascii=False) + '\n').encode('utf-8')
+        if len(line) > 2048:
+            raise ValueError('Scene suggestion is too long.')
+        with inbox.open('ab', buffering=0) as stream:
+            stream.write(line)
+        self.last_accepted = time.monotonic()
         self.counts['messagesReceived'] += 1
-        suggestion = re.search(r'\b(make|change|add|turn|bring|let|move)\b', text, re.I)
-        decision, reason = 'ignored', 'Fixture: no suggestion keyword. Not an AI judgment.'
-        if suggestion:
-            if time.monotonic() - self.last_accepted < 10:
-                decision, reason = 'deferred', 'Fixture: 10-second suggestion cooldown. Not queued for generation.'
-            else:
-                decision, reason = 'accepted', 'Fixture: suggestion keyword matched. Not applied to video.'
-                self.last_accepted = time.monotonic()
-        self.counts[decision] += 1
-        self.events.append(dict(id=secrets.token_hex(8), text=text.strip(), decision=decision,
-                                reason=reason, at=time.time(), engine='fixture', applied=False))
+        self.counts['accepted'] += 1
+        self.events.append(dict(id=secrets.token_hex(8), text=text.strip(), author=author.strip(),
+                                decision='queued', reason='Sent to model worker for moderation and scene writing.',
+                                at=time.time(), engine='operator', applied=False))
         self.events = self.events[-50:]
         return self.status()
 
@@ -447,7 +459,9 @@ def create_app(directory=None, env=None):
         data = await body(request)
         return web.json_response(await studio.start(data.get('source', 'test_signal'), data.get('duration'), data.get('confirmPaid', False), data.get('premise'), data.get('useStartingFrame', False)))
     async def stop(request): return web.json_response(await studio.stop())
-    async def chat(request): return web.json_response(studio.chat((await body(request)).get('text')))
+    async def chat(request):
+        data = await body(request)
+        return web.json_response(studio.chat(data.get('text'), data.get('author', 'operator')))
     async def credentials(request): return web.json_response(await studio.save_keys(await body(request)))
     async def destination(request): return web.json_response(await studio.save_destination(await body(request)))
     async def send_to_x(request): return web.json_response(await studio.start_publishing((await body(request)).get('confirmSend', False)))

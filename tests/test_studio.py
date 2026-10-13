@@ -92,16 +92,26 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 400)
         self.assertEqual(original, self.studio.show_path)
 
-    async def test_fixture_decisions_are_explicit_and_bounded(self):
+    async def test_operator_suggestion_is_queued_only_for_running_model(self):
         self.studio.phase = 'running'
-        for text, expected in [('love this', 'ignored'), ('make it rain', 'accepted'), ('change the scene', 'deferred')]:
-            response = await self.post('/api/chat', {'text': text})
-            event = (await response.json())['events'][-1]
-            self.assertEqual(event['decision'], expected)
-            self.assertEqual(event['engine'], 'fixture')
-            self.assertFalse(event['applied'])
-        self.assertEqual(self.studio.counts['messagesReceived'], 3)
+        self.studio.source = 'fast_h3'
+        self.studio.run_dir = Path(self.tmp.name) / 'runs' / 'test'
+        self.studio.run_dir.mkdir(parents=True)
+        inbox = self.studio.run_dir / 'chat-inbox.jsonl'
+        inbox.touch()
+        self.studio.process = type('Running', (), {'returncode': None})()
+        response = await self.post('/api/chat', {'text': 'make it rain', 'author': 'viewer'})
+        self.assertEqual(response.status, 200)
+        event = (await response.json())['events'][-1]
+        self.assertEqual(event['decision'], 'queued')
+        self.assertEqual(event['engine'], 'operator')
+        self.assertFalse(event['applied'])
+        self.assertEqual(json.loads(inbox.read_text())['text'], 'make it rain')
+        self.assertEqual((await self.post('/api/chat', {'text': 'change the scene'})).status, 400)
         self.assertEqual((await self.post('/api/chat', {'text': 'x' * 501})).status, 400)
+        self.studio.source = 'test_signal'
+        self.assertEqual((await self.post('/api/chat', {'text': 'make a cat'})).status, 400)
+        self.studio.process = None
 
     async def test_paid_adapter_command_is_local_only_and_uses_latest_premise(self):
         image = io.BytesIO()

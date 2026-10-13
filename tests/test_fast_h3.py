@@ -54,7 +54,7 @@ class FastServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.studio.child_env()["REACTOR_MODEL"], FAST_MODEL)
         self.assertEqual(self.studio.child_env()["SINK"], "preview")
 
-    async def test_starting_frame_copied_without_mutating_saved_show(self):
+    async def test_reference_image_copied_without_mutating_saved_show(self):
         show = Path(self.tmp.name) / "show.json"
         ref = Path(self.tmp.name) / "references" / "character-1.png"
         ref.parent.mkdir(); ref.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
@@ -64,8 +64,8 @@ class FastServerTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await self.studio.start(source="fast_h3", confirm_paid=True, premise="A scene", use_starting_frame=True)
         preset = json.loads((self.studio.run_dir / "fast-show.json").read_text())
-        self.assertEqual(preset["starting_frame"], "references/character-1.png")
-        self.assertTrue((self.studio.run_dir / preset["starting_frame"]).is_file())
+        self.assertEqual(preset["reference_image"], "references/character-1.png")
+        self.assertTrue((self.studio.run_dir / preset["reference_image"]).is_file())
         self.assertEqual(json.loads(show.read_text()), original)
 
 
@@ -74,11 +74,14 @@ class FastConfigTests(unittest.TestCase):
     def test_fast_preset_and_traversal_contract(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); (root / "references").mkdir(); (root / "references/character-1.png").write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
-            path = root / "fast.json"; path.write_text(json.dumps({"model": FAST_MODEL, "style": "clean", "narrative": {"premise": "scene"}, "starting_frame": "references/character-1.png"}))
+            path = root / "fast.json"; path.write_text(json.dumps({"model": FAST_MODEL, "style": "clean", "narrative": {"premise": "scene"}, "reference_image": "references/character-1.png"}))
             self.assertEqual(load_preset(str(path))["model"], FAST_MODEL)
-            bad = dict(json.loads(path.read_text()), starting_frame="references/../secret.png")
+            bad = dict(json.loads(path.read_text()), reference_image="references/../secret.png")
             path.write_text(json.dumps(bad))
             with self.assertRaises(PresetError): load_preset(str(path))
+            path.write_text(json.dumps(dict(json.loads(path.read_text()), model='reactor/h3-omni')))
+            with self.assertRaisesRegex(PresetError, 'Unsupported Reactor model'):
+                load_preset(str(path))
             path.write_text(json.dumps({'model': FAST_MODEL, 'style': 'natural', 'narrative': {'premise': 'A forest'}}))
             with patch.dict(os.environ, {'REACTOR_API_KEY': 'fake', 'XAI_API_KEY': 'fake'}, clear=True):
                 config = Config.load(['--preset', str(path)])
@@ -88,19 +91,23 @@ class FastConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, 'does not match'):
                     Config.load(['--preset', str(path), '--model', 'other'])
 
+    def test_published_model_contract_identifier(self):
+        self.assertEqual(FAST_MODEL, 'reactor/fast-h3-omni')
+
 
 @unittest.skipIf(ReactorLink is None, "runtime dependencies unavailable: " + _IMPORT_ERROR)
 class ReactorLinkFastTests(unittest.IsolatedAsyncioTestCase):
     def cfg(self, model=FAST_MODEL, refs=None):
         return SimpleNamespace(model=model, reference_paths=refs or [], local=False, api_key=None, local_url="http://127.0.0.1")
 
-    async def test_fast_enqueue_starting_frame_once_and_h3_references(self):
+    async def test_fast_enqueue_reference_image_once_and_h3_references(self):
         link = ReactorLink(self.cfg()); link._ready.set(); link._reactor = SimpleNamespace(send_command=AsyncMock(return_value={"type": "clip_queued", "data": {"clip": {"clip_id": 'one'}}}), disconnect=AsyncMock())
         link.starting_frame = {"id": "frame"}
         await link.send_command("enqueue", {"prompt": "p", "seconds": 5, "metadata": '{"m":1}', "reference_images": ["bad"]})
-        sent = link._reactor.send_command.call_args.args[1]; self.assertEqual(sent["starting_frame"], {"id": "frame"}); self.assertNotIn("reference_images", sent)
+        sent = link._reactor.send_command.call_args.args[1]; self.assertEqual(sent["reference_image"], {"id": "frame"}); self.assertNotIn("reference_images", sent)
+        self.assertEqual(sent['seconds'], 5.875)
         await link.send_command("enqueue", {"prompt": "q", "seconds": 5, "metadata": {}})
-        self.assertNotIn("starting_frame", link._reactor.send_command.call_args.args[1])
+        self.assertNotIn("reference_image", link._reactor.send_command.call_args.args[1])
         h3 = ReactorLink(self.cfg("reactor/h3-reference-to-video-turbo-realtime")); h3._ready.set(); h3._reactor = SimpleNamespace(send_command=AsyncMock(return_value={"type": "ok", "data": {}})); h3.reference_images=[{"id": 2}]
         await h3.send_command("enqueue", {"prompt": "p"}); self.assertEqual(h3._reactor.send_command.call_args.args[1]["reference_images"], [{"id": 2}])
         await link._teardown(); self.assertIsNone(link._reactor); self.assertFalse(link._ready.is_set())
@@ -116,7 +123,7 @@ class ReactorLinkFastTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(link._opening_frame_used)
         await link.send_command('enqueue', {'prompt': 'p', 'seconds': 6})
         self.assertTrue(link._opening_frame_used)
-        self.assertEqual(link._reactor.send_command.call_args.args[1]['starting_frame']['upload_id'], 'fresh')
+        self.assertEqual(link._reactor.send_command.call_args.args[1]['reference_image']['upload_id'], 'fresh')
 
     async def test_fast_session_initialization_and_fresh_handles_after_reconnect(self):
         @dataclass
@@ -148,7 +155,7 @@ class ReactorLinkFastTests(unittest.IsolatedAsyncioTestCase):
             async def send_command(self, command, data):
                 self.commands.append((command, data))
                 if command == 'get_state':
-                    return {'type': 'state_update', 'data': {'clip_seconds_min': 6, 'clip_seconds_max': 12,
+                    return {'type': 'state_update', 'data': {'clip_seconds_choices': [5.875, 8, 14.375],
                             'generation_capacity': 5, 'playout_capacity': 3}}
                 return {'type': 'accepted', 'data': {}}
 
@@ -163,7 +170,7 @@ class ReactorLinkFastTests(unittest.IsolatedAsyncioTestCase):
                         session = sessions[-1]
                         self.assertEqual(session.model, FAST_MODEL)
                         self.assertEqual(session.uploads, refs)
-                        self.assertEqual((link.min_seconds, link.max_seconds), (6, 12))
+                        self.assertEqual((link.min_seconds, link.max_seconds), (5.875, 14.375))
                         self.assertEqual(link.canvas, (1344, 768))
                         self.assertEqual(session.commands, [('get_state', {}), ('set_canvas', {'aspect': '16:9'}),
                                          ('set_flush_on_clip_end', {'enabled': False}), ('set_autoplay', {'enabled': True})])

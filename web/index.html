@@ -52,7 +52,7 @@
         <label class="field-label" for="model">Model</label>
         <select id="model">
           <option value="h3">H3 Turbo Realtime</option>
-          <option value="fast_h3">FastH3</option>
+          <option value="fast_h3">FastH3-Omni</option>
           <option value="test_signal">Test signal</option>
         </select>
         <div id="generationSettings">
@@ -61,13 +61,25 @@
             <div><label id="imageLabel" class="field-label" for="showFile">Reference image</label><p id="showMeta">PNG, JPEG or WebP</p></div>
             <label class="upload">Choose<input id="showFile" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose reference image"></label>
           </div>
-          <label id="startingFrameRow" class="starting-frame" hidden><input id="useStartingFrame" type="checkbox">Use starting frame</label>
+          <label id="startingFrameRow" class="starting-frame" hidden><input id="useStartingFrame" type="checkbox">Use image reference for opening clip</label>
           <label class="field-label" for="premise">Scene</label>
           <textarea id="premise" maxlength="2000" rows="5" placeholder="Describe what happens in your stream."></textarea>
         </div>
         <p id="setupMessage" class="help" role="status"></p>
         <div class="run-controls"><button id="start" class="primary" type="button" disabled>Start preview</button><button id="stop" class="secondary" type="button" disabled>Stop</button></div>
         <p id="usageNote" class="help">Uses Reactor and xAI credits until you stop.</p>
+        <section class="chat-control" aria-labelledby="chatHeading">
+          <h2 id="chatHeading">Audience scene suggestions</h2>
+          <p class="help">Paste a viewer idea from X, or write one yourself. The running model worker moderates it before it can shape a future clip. This local control does not read X comments automatically.</p>
+          <form id="chatForm">
+            <label class="field-label" for="chatAuthor">Viewer</label>
+            <input id="chatAuthor" maxlength="50" placeholder="@viewer or operator" value="operator">
+            <label class="field-label" for="chatText">Scene idea</label>
+            <textarea id="chatText" maxlength="500" rows="3" placeholder="Make the tiny chef discover a glowing bowl."></textarea>
+            <button id="sendChat" class="secondary" type="submit" disabled>Queue suggestion</button>
+          </form>
+          <p id="chatFeedback" class="help" role="status" aria-live="polite"></p>
+        </section>
       </aside>
     </div>
   </main>

@@ -40,8 +40,8 @@ function readiness() {
     if (!caps.h3) issue = 'Install requirements.txt to generate video.';
     else if (!keys.REACTOR_API_KEY || !keys.XAI_API_KEY) issue = 'Add your API keys above.';
     else if (selectedSource === 'h3' && !status.show) issue = 'Choose a reference image.';
-    else if (selectedSource === 'fast_h3' && !$('#premise').value.trim()) issue = 'Describe a scene to start FastH3.';
-    else if (selectedSource === 'fast_h3' && $('#useStartingFrame').checked && !status.show) issue = 'Choose a starting image.';
+    else if (selectedSource === 'fast_h3' && !$('#premise').value.trim()) issue = 'Describe a scene to start FastH3-Omni.';
+    else if (selectedSource === 'fast_h3' && $('#useStartingFrame').checked && !status.show) issue = 'Choose a reference image.';
   }
   $('#setupMessage').textContent = issue;
   return !issue;
@@ -60,10 +60,11 @@ function renderControls() {
     : x.error || (x.state === 'sending' ? 'Sending video · verify reception in X Live Studio'
     : x.state === 'connecting' ? 'Connecting to X…' : x.configured ? 'Destination saved · not sending' : 'Add your X source to send video.');
   $('#generationSettings').hidden = selectedSource === 'test_signal';
-  $('#imageLabel').textContent = selectedSource === 'fast_h3' ? 'Starting image (optional)' : 'Reference image';
-  $('#showFile').setAttribute('aria-label', selectedSource === 'fast_h3' ? 'Choose starting image' : 'Choose reference image');
+  $('#imageLabel').textContent = selectedSource === 'fast_h3' ? 'Opening reference (optional)' : 'Reference image';
+  $('#showFile').setAttribute('aria-label', 'Choose reference image');
   $('#premise').placeholder = selectedSource === 'fast_h3'
     ? 'Describe the scene, camera movement, and sound.' : 'Describe what happens in your stream.';
+  $('#sendChat').disabled = busy || !online || studioStatus?.state !== 'running' || studioStatus?.source === 'test_signal';
   $('#startingFrameRow').hidden = selectedSource !== 'fast_h3';
   $('#usageNote').textContent = selectedSource !== 'test_signal'
     ? 'Uses Reactor and xAI credits until you stop.' : 'No API usage.';
@@ -127,6 +128,18 @@ $('#start').addEventListener('click', () => mutate('/api/start', {
 $('#premise').addEventListener('input', renderControls);
 $('#useStartingFrame').addEventListener('change', renderControls);
 $('#stop').addEventListener('click', () => mutate('/api/stop', {}));
+$('#chatForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (busy) return;
+  const feedback = $('#chatFeedback');
+  feedback.textContent = '';
+  try {
+    render(await api('/api/chat', {method:'POST', headers:{'Content-Type':'application/json','X-Studio-Control':'1'},
+      body:JSON.stringify({author:$('#chatAuthor').value.trim(), text:$('#chatText').value.trim()})}));
+    feedback.textContent = 'Queued for moderation and scene writing; watch the worker log for the result.';
+    $('#chatText').value = '';
+  } catch (error) { feedback.textContent = error.message; }
+});
 preview.addEventListener('ended', () => { currentURL = null; playNextClip(); });
 preview.addEventListener('error', () => { currentURL = null; localError('Could not load a preview clip. Waiting for the next frame.'); });
 

@@ -13,7 +13,8 @@ import warnings
 import signal
 
 from chat import ChatSource
-from config import Config, read_options, presets_dir, FAST_MODEL
+from chat.local import LocalChatSource
+from config import Config, read_options, presets_dir, OMNI_MODELS
 from autoseed import prepare_show
 from pathlib import Path
 import os
@@ -43,8 +44,9 @@ def setup_logging() -> None:
 
 
 def build_chat_sources(config: Config, commands: tuple[str, ...]) -> list[ChatSource]:
-    """Audience adapters are intentionally disconnected during rehearsal."""
-    return []
+    """Read suggestions relayed by the loopback studio; X chat is not automatic."""
+    inbox = os.environ.get('LOCAL_CHAT_INBOX')
+    return [LocalChatSource(inbox)] if inbox else []
 
 
 async def main() -> None:
@@ -52,12 +54,12 @@ async def main() -> None:
     args = read_options()
     preset_name = args.preset or os.environ.get('PRESET', 'show.json')
     preset_path = Path(preset_name) if '/' in preset_name or preset_name.endswith('.json') else presets_dir() / f'{preset_name}.json'
-    if json.loads(preset_path.read_text()).get('model') != FAST_MODEL:
+    if json.loads(preset_path.read_text()).get('model') not in OMNI_MODELS:
         await prepare_show(preset_path)
     config = Config.load()
 
     link = ReactorLink(config)
-    writer = FastNarrativeUpsampler if config.model == FAST_MODEL else NarrativeUpsampler
+    writer = FastNarrativeUpsampler if config.model in OMNI_MODELS else NarrativeUpsampler
     upsampler = writer(
         narrative=config.narrative,
         api_key=config.writer_api_key,

@@ -1,7 +1,7 @@
-"""H3 Reference Turbo Realtime / FastH3 sessions and media delivery.
+"""H3 Reference Turbo Realtime / FastH3-Omni sessions and media delivery.
 
-Reference sessions attach ordered reference_images to every enqueue. FastH3
-accepts text alone and an optional starting_frame on the first successful enqueue.
+Reference sessions attach ordered reference_images to every enqueue. FastH3-Omni
+accepts text alone and an optional reference_image on the first enqueue.
 Reconnects discard uploaded handles and re-upload the configured images.
 Live queue/duration bounds come from get_state. Output dimensions come from the
 first actual video frame, because state need not advertise pixel dimensions.
@@ -18,7 +18,7 @@ from dataclasses import asdict
 
 from reactor_sdk import Reactor, ReactorStatus
 
-from config import Config, FAST_MODEL
+from config import Config, OMNI_MODELS
 from pacer import Pacer
 
 logger = logging.getLogger(__name__)
@@ -35,8 +35,7 @@ MODEL_SAMPLE_RATE = 48_000
 _DEFAULT_STATE: dict[str, Any] = {
     "width": 1344,
     "height": 768,
-    "clip_seconds_min": 5.0,
-    "clip_seconds_max": 15.084,
+    "clip_seconds_choices": [5.875, 8, 10.125, 12.25, 14.375],
     "generation_queued": 0,
     "generation_capacity": 20,
     "playout_queued": 0,
@@ -85,11 +84,13 @@ class ReactorLink:
 
     @property
     def min_seconds(self) -> float:
-        return float(self.state.get("clip_seconds_min", 5.0))
+        choices = self.state.get('clip_seconds_choices')
+        return float(min(choices)) if choices else float(self.state.get("clip_seconds_min", 5.0))
 
     @property
     def max_seconds(self) -> float:
-        return float(self.state.get("clip_seconds_max", 15.084))
+        choices = self.state.get('clip_seconds_choices')
+        return float(max(choices)) if choices else float(self.state.get("clip_seconds_max", 15.084))
 
     @property
     def generation_queued(self) -> int:
@@ -158,12 +159,15 @@ class ReactorLink:
             return None
         try:
             if command == "enqueue":
-                if self._config.model == FAST_MODEL:
+                if self._config.model in OMNI_MODELS:
                     data = dict(data)
                     data.pop('reference_images', None)
                     if (self.starting_frame and not self._opening_frame_used
-                            and 'starting_frame' not in data and 'continue_from_clip_id' not in data):
-                        data['starting_frame'] = self.starting_frame
+                            and 'reference_image' not in data and 'continue_from_clip_id' not in data):
+                        data['reference_image'] = self.starting_frame
+                    if data.get('seconds') is not None:
+                        choices = self.state.get('clip_seconds_choices') or _DEFAULT_STATE['clip_seconds_choices']
+                        data['seconds'] = min(choices, key=lambda value: abs(float(value) - float(data['seconds'])))
                 else:
                     data = {**data, "reference_images": self.reference_images}
             reply = payload(await reactor.send_command(command, data))
@@ -232,8 +236,11 @@ class ReactorLink:
 
         self._reactor = reactor
         state = await asyncio.wait_for(self._raw_command(reactor, "get_state"), 30)
-        required = ("clip_seconds_min", "clip_seconds_max", "generation_capacity", "playout_capacity")
-        if not isinstance(state, dict) or any(key not in state for key in required):
+        required = ("generation_capacity", "playout_capacity")
+        if (not isinstance(state, dict) or any(key not in state for key in required)
+                or (self._config.model in OMNI_MODELS and not state.get('clip_seconds_choices'))
+                or (self._config.model not in OMNI_MODELS and
+                    any(key not in state for key in ('clip_seconds_min', 'clip_seconds_max')))):
             raise RuntimeError("Model did not return its queue and duration contract")
         self.state = state
         self.generation_clips = []
@@ -244,11 +251,11 @@ class ReactorLink:
         for path in self._config.reference_paths:
             ref = await reactor.upload_file(path)
             uploaded = asdict(ref)
-            if self._config.model == FAST_MODEL:
+            if self._config.model in OMNI_MODELS:
                 self.starting_frame = uploaded
             else:
                 self.reference_images.append(uploaded)
-        if self._config.model == FAST_MODEL:
+        if self._config.model in OMNI_MODELS:
             if await self._raw_command(reactor, 'set_canvas', {'aspect': '16:9'}) is None:
                 raise RuntimeError('FastH3 canvas setup was refused')
             if await self._raw_command(reactor, 'set_flush_on_clip_end', {'enabled': False}) is None:

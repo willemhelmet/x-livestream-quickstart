@@ -17,7 +17,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from narrative import validate_narrative, reference_files, MODEL_NAME
 from grok import GROK_MODEL, XAI_BASE_URL
-FAST_MODEL = 'reactor/fast-h3'
+FAST_MODEL = 'reactor/fast-h3-omni'
+OMNI_MODELS = (FAST_MODEL,)
 
 
 def read_options(argv=None):
@@ -81,7 +82,10 @@ def load_preset(name_or_path: str) -> dict:
         raise PresetError(f"preset {path} is not valid JSON: {error}") from None
     if not isinstance(preset, dict):
         raise PresetError("Preset must be a JSON object")
-    if preset.get('model') == FAST_MODEL:
+    declared_model = preset.get('model')
+    if declared_model is not None and declared_model not in (MODEL_NAME, *OMNI_MODELS):
+        raise PresetError(f"Unsupported Reactor model: {declared_model}")
+    if preset.get('model') in OMNI_MODELS:
         narrative = preset.get('narrative')
         premise = narrative.get('premise') if isinstance(narrative, dict) else None
         style = preset.get('style')
@@ -90,13 +94,13 @@ def load_preset(name_or_path: str) -> dict:
         if not isinstance(style, str) or not style.strip() or len(style) > 2000:
             raise PresetError('FastH3 needs a valid visual style')
         paths = []
-        if preset.get('starting_frame') is not None:
+        if preset.get('reference_image') is not None:
             import re
-            reference = preset['starting_frame']
+            reference = preset['reference_image']
             if not isinstance(reference, str) or not re.fullmatch(r'references/character-1\.(png|jpg|webp)', reference):
-                raise PresetError('Invalid FastH3 starting frame path')
+                raise PresetError('Invalid FastH3-Omni reference image path')
             paths = reference_files({'characters': [{'name': 'Starting frame', 'reference': reference}]}, path.parent)
-        return dict(model=FAST_MODEL, reference_paths=paths, narrative={'premise': premise.strip()},
+        return dict(model=preset['model'], reference_paths=paths, narrative={'premise': premise.strip()},
                     style=style.strip(), idle_prompts=['Continue the scene naturally'])
     try:
         narrative = validate_narrative(preset.get("narrative"))
@@ -223,8 +227,8 @@ class Config:
 
     def validate(self) -> None:
         """Fail fast on contradictions instead of half-starting."""
-        if self.model not in (MODEL_NAME, FAST_MODEL):
-            raise SystemExit("Choose H3 Turbo Realtime or FastH3")
+        if self.model not in (MODEL_NAME, *OMNI_MODELS):
+            raise SystemExit("Choose H3 Turbo Realtime or FastH3-Omni")
         if self.twitch_channel and not __import__("re").fullmatch(r"[a-zA-Z0-9_]{1,25}", self.twitch_channel):
             raise SystemExit("TWITCH_CHANNEL must be a channel login, without a URL or #")
         if not self.local and not self.api_key:
