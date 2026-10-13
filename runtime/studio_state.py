@@ -24,6 +24,7 @@ def snapshot(link):
                 generationQueued=link.generation_queued, playoutQueued=link.playout_queued,
                 currentScene=scene_title(link.current_clip),
                 currentPrompt=link.current_clip.get('prompt', '') if isinstance(link.current_clip, dict) else '',
+                buffer=link.buffer.snapshot(), **link.build_metrics,
                 comingUp=[scene_title(clip) for clip in
                           (link.playout_clips + link.generation_clips)[:3]])
 

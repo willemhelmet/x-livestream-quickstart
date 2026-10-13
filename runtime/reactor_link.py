@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 from dataclasses import asdict
@@ -20,6 +21,7 @@ from reactor_sdk import Reactor, ReactorStatus
 
 from config import Config, OMNI_MODELS
 from omni_contract import CLIP_SECONDS
+from playback_buffer import PlaybackBuffer
 from pacer import Pacer
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,10 @@ class ReactorLink:
         self._opening_frame_used = False
         self.last_generated_clip_id = None
         self.current_clip = None
+        self.buffer = PlaybackBuffer(getattr(config, 'playback_buffer_seconds', 0))
+        self._inflight_clip_id = None
+        self._build_samples = deque(maxlen=8)
+        self._last_built_id = None
         self.video_frames = self.audio_frames = 0
         self._canvas = None
         self._listeners: list[Callable[[str, dict], None]] = []
@@ -103,7 +109,19 @@ class ReactorLink:
 
     @property
     def generation_queued(self) -> int:
-        return int(self.state.get("generation_queued", 0))
+        return max(int(self.state.get("generation_queued", 0)), int(self._inflight_clip_id is not None))
+
+    @property
+    def sequential_generation(self) -> bool:
+        return self._config.model in OMNI_MODELS and getattr(self._config, 'continue_scenes', False)
+
+    @property
+    def build_metrics(self) -> dict:
+        if not self._build_samples:
+            return dict(buildSeconds=None, generationRate=None)
+        media, build = zip(*self._build_samples)
+        return dict(buildSeconds=round(sum(build) / len(build), 2),
+                    generationRate=round(sum(media) / sum(build), 2))
 
     @property
     def generation_capacity(self) -> int:
@@ -149,6 +167,17 @@ class ReactorLink:
             clip = data.get('clip', {})
             if isinstance(clip, dict) and isinstance(clip.get('clip_id'), str):
                 self.last_generated_clip_id = clip['clip_id']
+                if self._inflight_clip_id == clip['clip_id']:
+                    self._inflight_clip_id = None
+                seconds, build = clip.get('seconds'), clip.get('build_seconds')
+                if (clip['clip_id'] != self._last_built_id and type(seconds) in (int, float)
+                        and type(build) in (int, float) and 0 < seconds < 1000 and 0 < build < 10000):
+                    self._build_samples.append((seconds, build))
+                    self._last_built_id = clip['clip_id']
+        elif kind == 'clip_failed':
+            clip = data.get('clip')
+            if isinstance(clip, dict) and self._inflight_clip_id == clip.get('clip_id'):
+                self._inflight_clip_id = None
         elif kind == 'clip_started':
             self.current_clip = data.get('clip')
         elif kind in ('clip_finished', 'clip_stopped'):
@@ -156,6 +185,8 @@ class ReactorLink:
         elif kind == 'session_reset':
             self.last_generated_clip_id = self.current_clip = None
             self._opening_frame_used = False
+            self._inflight_clip_id = None
+            self.buffer.reset()
         elif kind == "command_error":
             logger.warning(
                 "[reactor] command refused: %s — %s",
@@ -205,8 +236,12 @@ class ReactorLink:
             reply = payload(await reactor.send_command(command, data))
             if command == 'enqueue' and isinstance(reply, dict) and isinstance(reply.get('clip'), dict):
                 self._opening_frame_used = True
+                if self.sequential_generation and reply['clip'].get('clip_id') != self.last_generated_clip_id:
+                    self._inflight_clip_id = reply['clip'].get('clip_id')
                 if data.get('continue_from_clip_id'):
                     logger.info('[reactor] scene continuation accepted')
+            if command == 'set_autoplay' and reply is not None:
+                self.state['autoplay'] = data['enabled']
             return reply
         except Exception as error:
             logger.warning("[reactor] %s failed: %s", command, error)
@@ -283,6 +318,8 @@ class ReactorLink:
             raise RuntimeError('The deployed model does not support the selected scene length')
         self.generation_clips = []
         self.playout_clips = []
+        self._inflight_clip_id = None
+        self.buffer.reset()
         self.reference_images = []
         self.creative_refs = {}
         self.starting_frame = None
@@ -312,10 +349,14 @@ class ReactorLink:
         # milliseconds instead of a client round-trip. The director still
         # owns the ORDER — it curates the playout front with `move`, viewer
         # content first (see Director.run_playout).
-        if await self._raw_command(reactor, "set_autoplay", {"enabled": True}) is None:
+        autoplay = not self.buffer.seconds
+        if await self._raw_command(reactor, "set_autoplay", {"enabled": autoplay}) is None:
             raise RuntimeError("Autoplay was refused")
+        self.state['autoplay'] = autoplay
         self._first_state.set()
         self._ready.set()
+        for listener in self._listeners:
+            listener('session_ready', {})
         try:
             await disconnected.wait()
             logger.warning("[reactor] session disconnected")
@@ -344,6 +385,8 @@ class ReactorLink:
         self.starting_frame = None
         self._opening_frame_used = False
         self.last_generated_clip_id = self.current_clip = None
+        self._inflight_clip_id = None
+        self.buffer.reset()
         self.video_frames = self.audio_frames = 0
         reactor, self._reactor = self._reactor, None
         if reactor is None:

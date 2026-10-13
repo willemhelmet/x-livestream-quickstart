@@ -14,6 +14,7 @@ let storyLoaded = false;
 let storySessionId = null;
 let creativeDraft = {images:[], audios:[]};
 const directionFields = {camera:'cameraDirection', sound:'soundDirection', music:'musicDirection', dialogue:'dialogueDirection'};
+const speechFields = ['dialogueLanguage', 'dialogueSpeaker', 'dialogueVoice', 'exactDialogue'];
 const playedURLs = new Set();
 
 function isActive() { return ACTIVE.has(studioStatus?.state); }
@@ -24,10 +25,14 @@ function resetPlayback(id) {
   $('#videoEmpty').classList.remove('hidden'); $('#videoNotice').textContent = '';
 }
 function playNextClip() {
+  if (isActive() && studioStatus?.source === 'fast_h3' && ['warming','rebuffering'].includes(studioStatus?.model?.buffer?.phase)) return;
   const segments = studioStatus?.media?.segments || [];
   const available = new Set(segments.map(segment => segment.url));
   for (const url of playedURLs) if (!available.has(url)) playedURLs.delete(url);
-  const next = segments.find(segment => !playedURLs.has(segment.url));
+  if (!playedURLs.size && segments.length) {
+    for (const segment of segments.slice(0,-1)) playedURLs.add(segment.url);
+  }
+  const next = playedURLs.size ? segments.find(segment => !playedURLs.has(segment.url)) : segments.at(-1);
   if (!next) { currentURL = null; return; }
   currentURL = next.url; playedURLs.add(next.url);
   preview.src = next.url; preview.load(); $('#videoEmpty').classList.add('hidden');
@@ -58,7 +63,8 @@ function renderControls() {
   const sending = ['connecting', 'sending'].includes(x.state);
   document.querySelectorAll('#destinationForm input, #saveDestination').forEach(node => { node.disabled = busy || !online || sending; });
   $('#removeDestination').disabled = busy || !online || sending || !x.configured;
-  $('#sendToX').disabled = busy || !online || sending || !x.configured || studioStatus?.state !== 'running' || !studioStatus?.media?.segments?.length;
+  $('#sendToX').disabled = busy || !online || sending || !x.configured || studioStatus?.state !== 'running' || !studioStatus?.media?.segments?.length
+    || ['warming','rebuffering'].includes(studioStatus?.model?.buffer?.phase);
   $('#stopSending').disabled = busy || !online || !sending;
   $('#streamKeyState').textContent = x.hasStreamKey ? 'Saved' : 'Missing';
   $('#xStreamKey').placeholder = x.hasStreamKey ? 'Saved — leave blank to keep' : 'Paste from X Live Studio';
@@ -77,6 +83,12 @@ function renderControls() {
   const soundtrack = creativeDraft.audios.some(item => item.kind === 'soundtrack');
   $('#soundtrackNote').hidden = !soundtrack;
   for (const id of ['soundDirection', 'musicDirection', 'dialogueDirection']) $("#" + id).disabled = locked || !online || soundtrack;
+  $('#dialogueMode').disabled = locked || !online || soundtrack;
+  $('#speechSettings').hidden = soundtrack || $('#dialogueMode').value === 'off';
+  $('#scriptedSpeechRow').hidden = $('#dialogueMode').value === 'exact';
+  $('#exactSpeechRow').hidden = $('#dialogueMode').value !== 'exact';
+  const words = Math.min(12, Math.max(1, Math.floor((Number($('#clipSeconds').value) - 1.5) * 2)));
+  $('#speechBudget').textContent = `One speaker; up to ${words} words per scene. Finish the line with sentence punctuation.`;
   document.querySelectorAll('[data-clear-key]').forEach(node => {
     node.disabled = locked || !online || !studioStatus?.credentials?.[node.dataset.clearKey];
   });
@@ -95,10 +107,13 @@ function render(status) {
     $('#premise').value = status.story.premise;
     $('#visualStyle').value = status.story.style;
     $('#clipSeconds').value = String(status.story.clipSeconds);
+    $('#bufferSeconds').value = String(status.story.bufferSeconds ?? 16);
     $('#continueScenes').checked = status.story.continueScenes;
     $('#useStartingFrame').checked = status.story.useStartingFrame;
     const creative = status.story.creative || {};
     for (const [field, id] of Object.entries(directionFields)) $('#' + id).value = creative[field] || '';
+    $('#dialogueMode').value = creative.dialogueMode || 'auto';
+    for (const field of speechFields) $('#' + field).value = creative[field] || (field === 'dialogueLanguage' ? 'English' : '');
     creativeDraft = {images:(creative.images || []).map(item => ({...item})), audios:(creative.audios || []).map(item => ({...item}))};
     renderReferenceCards();
     renderKeyframes(status.assets || [], creative.firstFrame || '', creative.lastFrame || '');
@@ -118,6 +133,17 @@ function render(status) {
   if (status.state === 'failed') localError('Generation stopped unexpectedly. Check the server logs, then try again.');
   if (selectedSource === status.source && !currentURL && status.media?.segments?.length) playNextClip();
   const model = status.model || {};
+  const buffer = model.buffer || {};
+  const waiting = ['warming','rebuffering'].includes(buffer.phase);
+  $('#bufferStatus').textContent = !isActive() || status.source === 'test_signal' ? ''
+    : buffer.phase === 'warming' ? `Building playback reserve · ${buffer.readySeconds || 0}s of ${buffer.targetSeconds || 0}s ready`
+    : buffer.phase === 'rebuffering' ? `Rebuilding playback reserve · ${buffer.readySeconds || 0}s of ${buffer.targetSeconds || 0}s ready`
+    : buffer.targetSeconds ? `${buffer.readySeconds || 0}s ready ahead` : '';
+  if (isActive() && typeof model.generationRate === 'number') {
+    $('#bufferStatus').textContent += ` · Model generation ${model.generationRate.toFixed(2)}× realtime`;
+    if (model.generationRate < 1) $('#bufferStatus').textContent += ' — slower than playback; the reserve will eventually run out.';
+  }
+  $('#bufferStatus').classList.toggle('warning', waiting || model.generationRate < 1);
   $('#currentPromptDetails').hidden = !model.currentPrompt;
   $('#currentPrompt').textContent = model.currentPrompt || '';
   const testSignal = isActive() && status.source === 'test_signal';
@@ -167,11 +193,14 @@ function storySettings() { return {
   useStartingFrame:selectedSource === 'fast_h3' && $('#useStartingFrame').checked,
   style:$('#visualStyle').value.trim() || 'Natural motion, clear subjects, coherent camera and sound.',
   clipSeconds:Number($('#clipSeconds').value), continueScenes:$('#continueScenes').checked,
+  bufferSeconds:Number($('#bufferSeconds').value),
   creative:{...Object.fromEntries(Object.entries(directionFields).map(([field, id]) => [field, $('#' + id).value.trim()])),
+    ...Object.fromEntries(speechFields.map(field => [field, $('#' + field).value.trim()])), dialogueMode:$('#dialogueMode').value,
     images:creativeDraft.images, audios:creativeDraft.audios, firstFrame:$('#firstFrame').value, lastFrame:$('#lastFrame').value}
 }; }
 
 function creativeIssue() {
+  if ($('#dialogueMode').value === 'exact' && !$('#exactDialogue').value.trim() && !creativeDraft.audios.some(item => item.kind === 'soundtrack')) return 'Write the exact spoken line or choose scripted dialogue.';
   if (creativeDraft.images.length > 9) return 'Use at most 9 image references.';
   const maxAudio = $('#continueScenes').checked ? 2 : 3;
   if (creativeDraft.audios.length > maxAudio) return `Use at most ${maxAudio} audio references with these continuation settings.`;
@@ -241,6 +270,8 @@ for (const [id, target] of [['imageReferenceFile','images'],['audioReferenceFile
   $('#' + id).addEventListener('change', event => uploadReference(event, target));
 }
 for (const id of ['continueScenes', 'firstFrame', 'lastFrame']) $('#' + id).addEventListener('change', renderControls);
+for (const id of ['dialogueMode','clipSeconds','bufferSeconds']) $('#' + id).addEventListener('change', renderControls);
+$('#exactDialogue').addEventListener('input', renderControls);
 $('#inspectPrompt').addEventListener('click', async () => {
   try { const result = await api('/api/prompt-preview', {method:'POST',headers:{'Content-Type':'application/json','X-Studio-Control':'1'},body:JSON.stringify(storySettings())}); $('#promptPreview').textContent = result.prompt; }
   catch (error) { $('#promptPreview').textContent = error.message; }

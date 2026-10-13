@@ -24,7 +24,8 @@ from aiohttp import web
 from dotenv import dotenv_values
 from publisher import Publisher, validate_destination
 from runtime.omni_contract import MODEL_NAME as FAST_MODEL, CLIP_SECONDS, DEFAULT_CLIP_SECONDS, DEFAULT_STYLE
-from runtime.creative import validate_creative, assemble_prompt
+from runtime.creative import validate_creative, assemble_prompt, validate_speech
+from runtime.playback_buffer import BUFFER_CHOICES, DEFAULT_BUFFER_SECONDS
 
 ROOT = Path(__file__).resolve().parent
 MODEL = 'reactor/h3-reference-to-video-turbo-realtime'
@@ -44,7 +45,7 @@ def validate_keys(value):
 
 
 def validate_story(value):
-    fields = {'premise', 'style', 'clipSeconds', 'continueScenes', 'useStartingFrame', 'creative'}
+    fields = {'premise', 'style', 'clipSeconds', 'continueScenes', 'useStartingFrame', 'creative', 'bufferSeconds'}
     if not isinstance(value, dict) or set(value) - fields:
         raise ValueError('Provide story settings only.')
     premise, style = value.get('premise'), value.get('style', DEFAULT_STYLE)
@@ -58,11 +59,20 @@ def validate_story(value):
         raise ValueError('Choose a supported FastH3-Omni scene length.')
     if type(continuation) is not bool or type(reference) is not bool:
         raise ValueError('Scene continuation and opening reference must be enabled or disabled.')
+    buffer_seconds = value.get('bufferSeconds', DEFAULT_BUFFER_SECONDS)
+    if type(buffer_seconds) not in (int, float) or buffer_seconds not in BUFFER_CHOICES:
+        raise ValueError('Choose a supported playback buffer.')
     story = dict(premise=premise.strip(), style=style.strip() or DEFAULT_STYLE, clipSeconds=seconds,
                  continueScenes=continuation, useStartingFrame=reference)
     creative = validate_creative(value.get('creative', {}), continuation=continuation, opening_reference=reference)
     if creative:
         story['creative'] = creative
+    if creative.get('dialogueMode') == 'exact' and not any(item['kind'] == 'soundtrack' for item in creative.get('audios', [])):
+        validate_speech(dict(speaker=creative.get('dialogueSpeaker', 'The on-screen presenter'),
+            voice=creative.get('dialogueVoice', 'a clear, measured voice'), language=creative.get('dialogueLanguage', 'English'),
+            text=creative['exactDialogue'], picture=None, audio=None), seconds, creative)
+    if 'bufferSeconds' in value:
+        story['bufferSeconds'] = buffer_seconds
     return story
 
 
@@ -195,6 +205,17 @@ class Studio:
             if isinstance(value.get('comingUp'), list):
                 result['comingUp'] = [self.redact(title)[:120] for title in value['comingUp'][:3]
                                       if isinstance(title, str)]
+            buffer = value.get('buffer')
+            if isinstance(buffer, dict) and buffer.get('phase') in ('warming', 'playing', 'rebuffering'):
+                result['buffer'] = dict(phase=buffer['phase'] if fresh else 'idle')
+                for key in ('readySeconds', 'targetSeconds', 'underruns'):
+                    number = buffer.get(key)
+                    if type(number) in (int, float) and 0 <= number <= 10000:
+                        result['buffer'][key] = number
+            for key in ('buildSeconds', 'generationRate'):
+                number = value.get(key)
+                if type(number) in (int, float) and 0 <= number <= 10000:
+                    result[key] = number
         except (OSError, ValueError, TypeError):
             pass
         return result
@@ -243,6 +264,9 @@ class Studio:
         async with self.lock:
             if confirm_send is not True:
                 raise ValueError('Confirm Send to X before transmitting video.')
+            buffer = self.model_status().get('buffer', {})
+            if self.source == 'fast_h3' and buffer.get('phase') in ('warming', 'rebuffering'):
+                raise ValueError('Wait for the finished-scene buffer before sending to X.')
             self.publisher.start(self, self.destination)
             return self.status()
 
@@ -378,7 +402,8 @@ class Studio:
             return self.status()
 
     async def start(self, source='test_signal', duration=None, confirm_paid=False, premise=None, use_starting_frame=False,
-                    style=DEFAULT_STYLE, clip_seconds=DEFAULT_CLIP_SECONDS, continue_scenes=True, creative=None):
+                    style=DEFAULT_STYLE, clip_seconds=DEFAULT_CLIP_SECONDS, continue_scenes=True, creative=None,
+                    buffer_seconds=DEFAULT_BUFFER_SECONDS):
         async with self.lock:
             opening_image = None
             if self.process and self.process.returncode is None:
@@ -399,7 +424,7 @@ class Studio:
             if source == 'fast_h3':
                 story = validate_story(dict(premise=premise, style=style, clipSeconds=clip_seconds,
                                             continueScenes=continue_scenes, useStartingFrame=use_starting_frame,
-                                            creative=creative if creative is not None else {}))
+                                            creative=creative if creative is not None else {}, bufferSeconds=buffer_seconds))
                 creative_paths = self.resolve_creative(story.get('creative', {}))
                 premise, style = story['premise'], story['style']
                 if use_starting_frame and not self.show_path:
@@ -447,6 +472,7 @@ class Studio:
                 self.write_story(story)
                 fast_show = dict(version=1, model=FAST_MODEL,
                                  style=style.strip(), clip_seconds=clip_seconds,
+                                 playback_buffer_seconds=buffer_seconds,
                                  continue_scenes=continue_scenes, narrative={'premise': premise.strip()})
                 if story.get('creative'):
                     fast_show['narrative']['creative'] = story['creative']
@@ -649,13 +675,19 @@ def create_app(directory=None, env=None):
             data.get('source', 'test_signal'), data.get('duration'), data.get('confirmPaid', False),
             data.get('premise'), data.get('useStartingFrame', False),
             data.get('style', DEFAULT_STYLE), data.get('clipSeconds', DEFAULT_CLIP_SECONDS),
-            data.get('continueScenes', True), data.get('creative', {})))
+            data.get('continueScenes', True), data.get('creative', {}), data.get('bufferSeconds', DEFAULT_BUFFER_SECONDS)))
     async def stop(request): return web.json_response(await studio.stop())
     async def story(request): return web.json_response(await studio.save_story(await body(request)))
     async def prompt_preview(request):
         settings = validate_story(await body(request))
+        creative = settings.get('creative', {})
+        speech = None
+        if creative.get('dialogueMode') == 'exact' and not any(item['kind'] == 'soundtrack' for item in creative.get('audios', [])):
+            speech = dict(speaker=creative.get('dialogueSpeaker', 'The on-screen presenter'),
+                voice=creative.get('dialogueVoice', 'a clear, measured voice'), language=creative.get('dialogueLanguage', 'English'),
+                text=creative['exactDialogue'], picture=None, audio=None)
         return web.json_response({'prompt': studio.redact(assemble_prompt(settings['premise'], settings['style'],
-            settings.get('creative', {}), opening_reference=settings['useStartingFrame']))})
+            creative, speech=speech, opening_reference=settings['useStartingFrame']))})
     async def creative_upload(request):
         return web.json_response(await studio.upload_creative(await request.read(), request.headers.get('X-Asset-Type', 'image')))
     async def creative_media(request):
@@ -682,7 +714,7 @@ def create_app(directory=None, env=None):
         return web.json_response(await studio.upload(payload, unquote(request.headers.get('X-Show-Premise', ''))))
     async def asset(request):
         name = request.match_info.get('name', 'index.html')
-        if name not in ('index.html', 'app.js', 'style.css'):
+        if name not in ('index.html', 'app.js', 'style.css', 'grok-wordmark.svg'):
             raise web.HTTPNotFound()
         return web.FileResponse(ROOT / 'web' / name)
     async def media(request):

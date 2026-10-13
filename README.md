@@ -46,11 +46,13 @@ Click **Save destination**. Saving credentials does not start generation or send
 
 **FastH3-Omni** is the default. Describe what your show is about, choose its visual direction and a supported scene length. Grok writes each next beat as the show runs. Expand **Camera & sound** for framing, camera movement, ambience, music and exact dialogue/voice direction.
 
+**Speech** offers short scripted lines, **Say this exact line**, or **No speech**. Set a stable speaker, voice and language for a presenter-led show. Grok returns one typed vocal event per clip, separate from the visible action; the app validates it and places only the language and exact words inside `<d>[English] …</d>` within the shot. Lines are capped at roughly two words per second after a 1.5-second allowance, with an absolute maximum of twelve words. Keep them complete, with sentence punctuation. No-speech clips explicitly forbid dialogue/background voices and keep characters' lips closed. Invalid output gets one repair attempt, not an unchecked path to the video model. This follows [MiniMax's upstream H3 prompting guide](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_base_en.md); the deployed model still needs a listening test, and the format alone cannot guarantee intelligible speech.
+
 **Image & audio references** accepts up to nine ordered images and three audio clips (two when carrying scenes). Give each a role and description: character, object or location/look; voice, ambience or complete soundtrack. Audio must be 2–15 seconds, mono or stereo, and needs an image for the opening scene. A complete soundtrack suppresses generated sound/music/dialogue directions. Uploads are validated and saved locally; Reactor receives them only when generation starts. Grok receives their text descriptions, not the uploaded media.
 
 **Carry motion and sound into the next scene** uses the most recent generated clip as a latent continuation source. Turn it off for independent shots. Appearance and audio references remain attached to every scene. **Opening keyframes** can pin the first and/or last frame of the opening scene, alongside at least one appearance reference. These keyframes are not applied to later scenes; latent continuation cannot accept them. Frame-mode continuation and per-scene keyframe editing are not exposed in this continuous-show UI.
 
-**Inspect prompt structure** shows how your premise and directions are assembled with numbered `<Picture N>` and `<Audio N>` definitions. Grok writes the scene beat; the app attaches reference roles and camera/sound/music/dialogue directions deterministically. **Prompt for the current scene**, below the preview, shows the actual queued prompt once that scene plays. Large combinations of references and text can still exceed the deployment's request budget; the model remains the authority on admission.
+**Inspect prompt structure** shows how your premise and directions are assembled with numbered `<Subject N>`, `<Picture N>` and `<Audio N>` definitions. Grok supplies the action, camera, sound, music and optional speech as validated JSON; code compiles the canonical shot/soundscape/music sections, and the full reference sections when uploads are present. The inspection is illustrative for scripted lines; exact-line mode shows your words. **Prompt for the current scene**, below the preview, shows the actual queued prompt once that scene plays. Large combinations of references and text can still exceed the deployment's request budget; the model remains the authority on admission.
 
 **Save show** stores your narrative settings on this computer without starting generation. The app also saves them when you start preview, and restores them when you reopen the dashboard.
 
@@ -60,13 +62,17 @@ For example:
 
 Click **Start preview** to start generating video and audio. Grok keeps writing new scene directions as the stream runs; you don't need to queue every clip yourself.
 
+**Playback buffer** defaults to **16 seconds of finished scenes** before autoplay starts. Generation and writing run ahead within the deployment's queue limits; unfinished requests do not count toward the reserve. When it runs out, the model holds its last frame while the reserve rebuilds instead of immediately playing each isolated arrival. With clip continuation, builds stay sequential so each new clip continues the immediately preceding generated clip, and ready scenes stay in that order. Viewer suggestions therefore arrive after the already-built reserve rather than jumping ahead of their continuation source. Grok sees accepted future beats as well as played history, so it doesn't repeat the opening while warming the buffer.
+
+Increase the buffer to absorb generation-time spikes; it adds startup time, upfront generation credits and audience-response latency. The effective target is capped by ready-queue capacity. The dashboard reports finished seconds ahead and, when available, model build speed relative to playback. **A buffer cannot fix a producer that stays slower than realtime**: it will eventually run out. This intentionally borrows just the bounded-runway and structured-expansion ideas from the [Dazzle specification](https://connerruhl-exports.pages.dev/dazzle-specification-324a0f/#1-overview), not its whole agent/planner/transport stack.
+
 Below **Live Preview**, the dashboard shows the current scene, upcoming scenes, queue counts, and whether model video and audio have arrived. Unmute the preview player to listen before sending the feed to X.
 
 **Generation uses paid Reactor and xAI credits until you stop.** There is no automatic spending cap.
 
 ### 4. Send it to X
 
-Once video appears, click **Send to X** and confirm.
+Once video appears and the playback reserve is ready, click **Send to X** and confirm. The dashboard prevents starting transmission during initial buffering or a refill.
 
 In X Live Studio, create or open a broadcast using **the same source**. Verify the incoming picture and sound, then start your broadcast in X. See [X's broadcast setup guide](https://help.x.com/en/using-x/how-to-use-live-producer) for the source-to-broadcast flow.
 

@@ -116,6 +116,33 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(self.studio.story_file.read_text()), story)
         self.assertEqual((await self.client.post('/api/story', json=story)).status, 403)
 
+    async def test_buffer_settings_and_exact_dialogue_fail_before_generation(self):
+        story = dict(premise='Fairy news',bufferSeconds=16,clipSeconds=8,creative=dict(dialogueMode='exact',
+            dialogueLanguage='English',dialogueSpeaker='Lira',dialogueVoice='a clear low voice',exactDialogue='The enchanted bridge is open.'))
+        saved = await self.post('/api/story',story)
+        self.assertEqual(saved.status,200)
+        self.assertEqual((await saved.json())['story']['bufferSeconds'],16)
+        self.assertIsNone(self.studio.process)
+        preview = await self.post('/api/prompt-preview',story)
+        self.assertEqual(preview.status,200)
+        self.assertIn('<d>[English] The enchanted bridge is open.</d>',(await preview.json())['prompt'])
+        for buffer in (True,15,100):
+            self.assertEqual((await self.post('/api/story',dict(story,bufferSeconds=buffer))).status,400)
+        long_line = 'This is a very long sentence with too many words to fit a short clip.'
+        self.assertEqual((await self.post('/api/start',dict(story,source='fast_h3',confirmPaid=True,creative={**story['creative'],'exactDialogue':long_line}))).status,400)
+        self.assertIsNone(self.studio.process)
+
+    async def test_x_waits_for_ready_buffer_and_grok_logo_is_served(self):
+        self.studio.source = 'fast_h3'
+        with patch.object(self.studio,'model_status',return_value={'buffer':{'phase':'warming'}}), patch.object(self.studio.publisher,'start') as start:
+            response = await self.post('/api/x/start',{'confirmSend':True})
+            self.assertEqual(response.status,400); start.assert_not_called()
+        response = await self.client.get('/grok-wordmark.svg')
+        self.assertEqual(response.status,200)
+        self.assertIn('fill="white"',await response.text())
+        html = await (await self.client.get('/')).text()
+        self.assertIn('alt="Grok"',html); self.assertNotIn('class="x-logo"',html)
+
     async def test_image_upload_validates_actual_content(self):
         image = io.BytesIO()
         Image.new('RGB', (32, 32), '#996644').save(image, format='PNG')
@@ -145,7 +172,7 @@ class StudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored.status()['assets'], [asset])
         prompt = await self.post('/api/prompt-preview', story)
         self.assertEqual(prompt.status, 200)
-        self.assertIn('Camera: Slow push in', (await prompt.json())['prompt'])
+        self.assertIn('Slow push in', (await prompt.json())['prompt'])
         wrong = dict(story, creative={'images':[dict(id='0'*24,kind='person',description='Missing')]})
         self.assertEqual((await self.post('/api/story', wrong)).status, 400)
         self.assertEqual((await self.client.post('/api/assets', data=image.getvalue())).status, 403)

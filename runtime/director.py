@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import random
 import time
 from collections.abc import Sequence
@@ -246,14 +247,18 @@ class Director:
             # playout capacity: filler must never be what fills the playout
             # queue to the brim, because a full playout queue pauses builds
             # (leave at least one slot's headroom for a viewer clip to land).
-            target = min(
-                self._idle_target, max(1, self._link.playout_capacity - 1)
-            )
+            buffer = getattr(self._link, 'buffer', None)
+            if buffer and buffer.seconds:
+                target = min(max(self._idle_target, math.ceil(buffer.seconds / self._link.min_seconds) + 1),
+                             self._link.playout_capacity + 1)
+            else:
+                target = min(self._idle_target, max(1, self._link.playout_capacity - 1))
             if (
                 not self._pending.empty()
                 or not self._link.connected
                 or self._link.generation_queued + self._link.playout_queued
                 >= target
+                or self._link.generation_queued >= self._link.generation_capacity
             ):
                 continue
             text = self._idle_prompts[self._idle_index % len(self._idle_prompts)]
@@ -297,7 +302,12 @@ class Director:
                 continue
             await self._relieve_build_backpressure()
             clips = self._link.playout_clips
+            await self._maintain_playback_buffer()
             desired = pick_next(clips)
+            # Ready scenes in a continued narrative must play in build order;
+            # jumping a viewer clip ahead would skip its continuation source.
+            if getattr(self._link, 'sequential_generation', False):
+                continue
             if desired is None or clips[0]["clip_id"] == desired["clip_id"]:
                 continue
             await self._link.send_command(
@@ -305,6 +315,15 @@ class Director:
             )
             # Let the resulting queue_update land before re-evaluating.
             await asyncio.sleep(_PLAYOUT_POLL_S)
+
+    async def _maintain_playback_buffer(self):
+        buffer = getattr(self._link, 'buffer', None)
+        if buffer and buffer.seconds:
+            enabled = buffer.update(self._link.playout_clips,
+                playing=bool(self._link.state.get('playing') or self._link.current_clip),
+                capacity=self._link.playout_capacity, clip_seconds=self._link.min_seconds)
+            if self._link.state.get('autoplay') is not enabled:
+                await self._link.send_command('set_autoplay', {'enabled': enabled})
 
     async def _relieve_build_backpressure(self) -> None:
         """Pop one playout filler when built fillers block a viewer's build.
@@ -315,6 +334,8 @@ class Director:
         every chance to make room by playing instead.
         """
         if self._link.playout_queued < self._link.playout_capacity:
+            return
+        if getattr(self._link, 'sequential_generation', False):
             return
         viewer_waiting = any(
             not is_generated(clip) for clip in self._link.generation_clips
@@ -350,6 +371,8 @@ class Director:
         """
         scene_count = len(group.scenes)
         async with self._enqueue_lock:
+            while getattr(self._link, 'sequential_generation', False) and self._link.generation_queued:
+                await asyncio.sleep(_PLAYOUT_POLL_S)
             free = self._link.generation_capacity - self._link.generation_queued
             if free < scene_count and not group.generated:
                 evictable = sum(
@@ -374,6 +397,10 @@ class Director:
                 else viewer_insert_position(self._link.generation_clips)
             )
             for index, scene in enumerate(group.scenes, start=1):
+                # Continuation IDs must name the immediately preceding finished
+                # build, not one stale clip reused by several queued futures.
+                while getattr(self._link, 'sequential_generation', False) and self._link.generation_queued:
+                    await asyncio.sleep(_PLAYOUT_POLL_S)
                 metadata = json.dumps(
                     {
                         "group_id": group.group_id,
@@ -402,6 +429,8 @@ class Director:
                     reply = await self._link.send_command("enqueue", payload)
                     if isinstance(reply, dict) and "clip" in reply:
                         clip = reply["clip"]
+                        if hasattr(self._upsampler, 'record_queued'):
+                            self._upsampler.record_queued(clip)
                         logger.info(
                             "[director] queued %s scene %d/%d as %s (%.1fs, seed %s)%s",
                             group.group_id, index, scene_count,

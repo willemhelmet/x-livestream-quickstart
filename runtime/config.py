@@ -17,6 +17,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from narrative import validate_narrative, reference_files, MODEL_NAME
 from creative import validate_creative
+from playback_buffer import BUFFER_CHOICES, DEFAULT_BUFFER_SECONDS
 from grok import GROK_MODEL, XAI_BASE_URL
 from omni_contract import MODEL_NAME as FAST_MODEL, CLIP_SECONDS, DEFAULT_CLIP_SECONDS
 OMNI_MODELS = (FAST_MODEL,)
@@ -100,6 +101,9 @@ def load_preset(name_or_path: str) -> dict:
         continuation = preset.get('continue_scenes', True)
         if type(continuation) is not bool:
             raise PresetError('Scene continuation must be enabled or disabled')
+        buffer_seconds = preset.get('playback_buffer_seconds', DEFAULT_BUFFER_SECONDS)
+        if type(buffer_seconds) not in (int, float) or buffer_seconds not in BUFFER_CHOICES:
+            raise PresetError('Choose a supported playback buffer')
         paths = []
         if preset.get('reference_image') is not None:
             import re
@@ -135,7 +139,8 @@ def load_preset(name_or_path: str) -> dict:
             narrative_settings['opening_reference'] = True
         return dict(model=preset['model'], reference_paths=paths, narrative=narrative_settings,
                     style=style.strip(), idle_prompts=['Continue the scene naturally'],
-                    clip_seconds=seconds, continue_scenes=continuation, creative_paths=creative_paths)
+                    clip_seconds=seconds, continue_scenes=continuation, creative_paths=creative_paths,
+                    playback_buffer_seconds=buffer_seconds)
     try:
         narrative = validate_narrative(preset.get("narrative"))
     except ValueError as error:
@@ -207,6 +212,7 @@ class Config:
     clip_seconds: float | None = None
     continue_scenes: bool = False
     creative_paths: dict | None = None
+    playback_buffer_seconds: float = 0
 
     @staticmethod
     def load(argv: list[str] | None = None) -> "Config":
@@ -244,7 +250,7 @@ class Config:
             moderation_api_key=writer_api_key,
             moderation_base_url=XAI_BASE_URL,
             moderation_model=GROK_MODEL,
-            idle_queue_target=int(os.environ.get("IDLE_QUEUE_TARGET", "1")),
+            idle_queue_target=int(os.environ.get("IDLE_QUEUE_TARGET", "4" if selected_model in OMNI_MODELS else "1")),
             overlay_enabled=_flag(os.environ.get("OVERLAY_ENABLED", "1")),
             sink=(args.sink or os.environ.get("SINK", "noop")).lower(),
             rtmp_url=None,
@@ -260,6 +266,7 @@ class Config:
             clip_seconds=preset.get('clip_seconds'),
             continue_scenes=preset.get('continue_scenes', False),
             creative_paths=preset.get('creative_paths', {}),
+            playback_buffer_seconds=preset.get('playback_buffer_seconds', 0),
 
         )
         config.validate()
